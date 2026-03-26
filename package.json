@@ -1,7 +1,10 @@
 {
-    "id": "com.arisen.core",
-    "version": "1.0.0",
-    "dependencies": {
-        "com.arisen.core.native": "1.0.0"
-    }
+  "id": "com.arisen.core",
+  "version": "1.0.0",
+  "dependencies": {
+    "com.arisen.core.native": "1.0.0"
+  },
+  "name": "Core",
+  "description": "",
+  "author": ""
 }

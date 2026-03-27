@@ -1,10 +1,13 @@
 {
   "id": "com.arisen.core",
+  "name": "Core",
   "version": "1.0.0",
+  "author": "",
+  "description": "",
+  "entry": {
+    "assembly": "Com.Arisen.Core.dll"
+  },
   "dependencies": {
     "com.arisen.core.native": "1.0.0"
-  },
-  "name": "Core",
-  "description": "",
-  "author": ""
+  }
 }

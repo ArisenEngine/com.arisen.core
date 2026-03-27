@@ -5,7 +5,8 @@
   "author": "",
   "description": "",
   "entry": {
-    "assembly": "Com.Arisen.Core.dll"
+    "assembly": "Com.Arisen.Core.dll",
+    "class": "ArisenEngine.Core.CorePackage"
   },
   "dependencies": {
     "com.arisen.core.native": "1.0.0"

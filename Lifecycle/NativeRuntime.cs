@@ -1,5 +1,6 @@
 using System;
 using Arisen.Native.RHI;
+using ArisenKernel.Diagnostics;
 using ArisenEngine.Core.Diagnostics;
 using ArisenEngine.Core.RHI;
 
@@ -31,7 +32,7 @@ public static class NativeRuntime
         catch (Exception e)
         {
             // Fallback to console if logger is not ready, but usually EngineInit handles logger
-            Console.WriteLine($"[NativeRuntime] Failed to initialize native engine: {e.Message}");
+            KernelLog.ErrorFormat("[NativeRuntime] Failed to initialize native engine: {0}", e.Message);
         }
 
         return false;

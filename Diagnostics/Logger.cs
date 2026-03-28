@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
+using ArisenKernel.Contracts;
 using Arisen.Native.Diagnostics;
 
 namespace ArisenEngine.Core.Diagnostics;
@@ -245,9 +246,6 @@ public static class Logger
                 System.Buffers.ArrayPool<byte>.Shared.Return(msgBuffer);
             }
         }
-
-        // Also keep Console.WriteLine for now as a fallback/easier debugging
-        Console.WriteLine($"[{level}] {msgStr}");
     }
 
     public static void Clear()
@@ -269,4 +267,25 @@ public static class Logger
         IsInitialized = ok;
         return ok;
     }
+}
+
+/// <summary>
+/// Managed bridge that implements the engine-wide ILogger interface.
+/// </summary>
+public class EngineLogger : ILogger
+{
+    public void Log(string message) => Logger.Log(message);
+    public void LogFormat(string format, params object[] args) => Logger.Log(string.Format(format, args));
+
+    public void Warning(string message) => Logger.Warning(message);
+    public void WarningFormat(string format, params object[] args) => Logger.Warning(string.Format(format, args));
+
+    public void Error(string message) => Logger.Error(message);
+    public void ErrorFormat(string format, params object[] args) => Logger.Error(string.Format(format, args));
+
+    public void Fatal(string message) => Logger.Fatal(message);
+    public void FatalFormat(string format, params object[] args) => Logger.Fatal(string.Format(format, args));
+
+    public void Assert(bool condition, string message = "") => Logger.Assert(condition, message);
+    public void AssertFormat(bool condition, string format, params object[] args) => Logger.Assert(condition, string.Format(format, args));
 }

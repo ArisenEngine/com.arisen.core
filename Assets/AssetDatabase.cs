@@ -39,8 +39,7 @@ public class AssetDatabase
     {
         foreach (var filePath in Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.AllDirectories))
         {
-            // Skip .meta files themselves
-            if (filePath.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) 
+            if (IsIgnoredPath(filePath))
                 continue;
 
             string metaPath = filePath + ".meta";
@@ -92,10 +91,40 @@ public class AssetDatabase
     }
 
     /// <summary>
-    /// Looks up the registered GUID for an absolute file path.
+    /// <summary>
+    /// Checks if a file or any of its parent directories should be ignored by the asset pipeline.
+    /// Rules: Starts with '.', is a .meta file, or is explicitly hidden by the OS.
     /// </summary>
-    public Guid? GetAssetGuid(string path)
+    private bool IsIgnoredPath(string path)
     {
-        return m_PathRegistry.TryGetValue(path, out var guid) ? guid : null;
+        if (string.IsNullOrEmpty(path)) return true;
+        
+        // 1. Skip if the file itself is a .meta
+        if (path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var name = Path.GetFileName(path);
+        if (name.StartsWith(".")) return true;
+
+        // 2. Check all parent directories up to the root of the scan
+        // In a high-performance engine, we might want to cache this or use a more efficient check.
+        var dir = Path.GetDirectoryName(path);
+        while (!string.IsNullOrEmpty(dir))
+        {
+            var dirName = Path.GetFileName(dir);
+            if (dirName.StartsWith(".")) return true;
+            
+            // Optimization: Stop if we reach a known engine root if needed, but for now simple recursion
+            dir = Path.GetDirectoryName(dir);
+        }
+
+        // 3. Fallback to OS File attributes (Hidden/System)
+        try 
+        {
+            var attr = File.GetAttributes(path);
+            if ((attr & FileAttributes.Hidden) != 0 || (attr & FileAttributes.System) != 0) return true;
+        }
+        catch { /* Ignore path access errors */ }
+
+        return false;
     }
 }

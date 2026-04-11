@@ -1,10 +1,11 @@
+using System;
 using Arisen.Native.RHI;
 
 namespace ArisenEngine.Core.RHI;
 
 public readonly struct RHISwapChain
 {
-    internal IntPtr Handle { get; }
+    public IntPtr Handle { get; }
 
     public bool IsValid => Handle != IntPtr.Zero;
 
@@ -13,20 +14,22 @@ public readonly struct RHISwapChain
         Handle = handle;
     }
 
-    public RHIImageHandle BeginFrame(uint frameIndex)
+    public IntPtr GetSharedWin32Handle(uint index)
     {
-        ulong handleValue = RHISwapChainAPI.RHISwapChain_BeginFrame(Handle, frameIndex);
-        return new RHIImageHandle { Index = (uint)(handleValue & 0xFFFFFFFF), Generation = (uint)(handleValue >> 32) };
-    }
-
-    public void EndFrame(uint frameIndex)
-    {
-        RHISwapChainAPI.RHISwapChain_EndFrame(Handle, frameIndex);
+        if (!IsValid) return IntPtr.Zero;
+        return RHISwapChainAPI.RHISwapChain_GetSharedWin32Handle(Handle, index);
     }
 
     public RHIImageViewHandle GetImageView(uint frameIndex)
     {
-        ulong handleValue = RHISwapChainAPI.RHISwapChain_GetImageView(Handle, frameIndex);
-        return new RHIImageViewHandle { Index = (uint)(handleValue & 0xFFFFFFFF), Generation = (uint)(handleValue >> 32) };
+        if (!IsValid) return RHIImageViewHandle.Invalid;
+        ulong packed = RHISwapChainAPI.RHISwapChain_GetImageView(Handle, frameIndex);
+        unsafe { return *(RHIImageViewHandle*)&packed; }
+    }
+
+    public void SetResolution(uint width, uint height)
+    {
+        if (!IsValid) return;
+        RHISwapChainAPI.RHISwapChain_SetResolution(Handle, width, height);
     }
 }

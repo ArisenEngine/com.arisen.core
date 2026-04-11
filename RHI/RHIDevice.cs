@@ -82,6 +82,12 @@ public readonly struct RHIDevice
         RHIDeviceAPI.RHIDevice_WaitQueueTicket(Handle, ticket);
     }
 
+    public void SetResolution(uint width, uint height)
+    {
+        if (!IsValid) return;
+        RHIDeviceAPI.RHIDevice_SetResolution(Handle, width, height);
+    }
+
     public RHISurface GetSurface()
     {
         var surfacePtr = RHIDeviceAPI.RHIDevice_GetSurface(Handle);

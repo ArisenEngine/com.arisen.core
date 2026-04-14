@@ -82,6 +82,11 @@ public readonly struct RHIDevice
         RHIDeviceAPI.RHIDevice_WaitQueueTicket(Handle, ticket);
     }
 
+    public ulong GetCompletedTicket()
+    {
+        return RHIDeviceAPI.RHIDevice_GetCompletedSubmitTicket(Handle);
+    }
+
     public void SetResolution(uint width, uint height)
     {
         if (!IsValid) return;

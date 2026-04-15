@@ -24,6 +24,10 @@ public static class RHISystem
             m_PhysicalDevicePicked = true;
         }
 
+        // Ensure a surface exists for this window before creating the device
+        // This is critical for the native RHI to correctly associate the device with a surface pointer.
+        m_Instance.Value.CreateSurface(windowId);
+
         var device = m_Instance.Value.CreateDevice(windowId);
         m_DeviceWrappers.TryAdd(windowId, device);
 

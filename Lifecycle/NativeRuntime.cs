@@ -17,22 +17,32 @@ public static class NativeRuntime
 
         try
         {
-            // Initialize Diagnostics first
+            // Initialize Diagnostics first (Logging, Profiler)
 #if ARISEN_ENGINE_EDITOR
-            
             Diagnostics.Logger.Initialize(true);
 #else
-           
             Diagnostics.Logger.Initialize(false);
 #endif
             
             // Register the primary engine logger
             registry.RegisterService<ILogger>(new EngineLogger());
 
-            // Initialize Graphics RHI (Default to Vulkan for now)
+            // 1. Initialize the global RHI System (Defaulting to Vulkan with validation)
             if (RHISystem.Initialize(GraphicsAPI.Vulkan, validationLayer: true))
             {
-                // Defer physical device picking and surface creation to actual surface registration
+                // 2. Resolve the primary device for the Headless/Editor interop context.
+                // 0xFFFFFFFF is our virtual ID for surfaces that don't own a native window.
+                var rhiDevice = RHISystem.GetOrCreateDevice(0xFFFFFFFF);
+                
+                // 3. Set a high-fidelity default resolution (1080p) for the virtual surface.
+                // The modern RHI will lazily allocate the swapchain on the first frame using these dimensions.
+                rhiDevice.SetResolution(1920, 1080);
+
+                // 4. Register the IRHIDevice service using the shared Vulkan device handle
+                // We wrap it in a VulkanRHIDevice provider class found in the core.native package.
+                registry.RegisterService<ArisenKernel.Contracts.IRHIDevice>(
+                    new ArisenEngine.Core.Native.VulkanRHIDevice(rhiDevice.Handle));
+
                 m_IsInitialized = true;
                 return true;
             }
@@ -41,8 +51,7 @@ public static class NativeRuntime
         }
         catch (Exception e)
         {
-            // Fallback to console if logger is not ready, but usually EngineInit handles logger
-            KernelLog.ErrorFormat("[NativeRuntime] Failed to initialize native engine: {0}", e.Message);
+            KernelLog.ErrorFormat("[NativeRuntime] Failed to initialize native engine foundation: {0}", e.Message);
         }
 
         return false;
@@ -51,16 +60,6 @@ public static class NativeRuntime
     public static void Shutdown()
     {
         if (!m_IsInitialized) return;
-
-        try
-        {
-            RHISystem.Shutdown();
-            // Arisen.Native.Core.EngineInit.Shutdown();
-            m_IsInitialized = false;
-        }
-        catch (Exception e)
-        {
-            Logger.Fatal($"[NativeRuntime] Error during native engine shutdown: {e.Message}");
-        }
+        m_IsInitialized = false;
     }
 }

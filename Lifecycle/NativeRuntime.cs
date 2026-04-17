@@ -31,8 +31,8 @@ public static class NativeRuntime
             if (RHISystem.Initialize(GraphicsAPI.Vulkan, validationLayer: true))
             {
                 // 2. Resolve the primary device for the Headless/Editor interop context.
-                // 0xFFFFFFFF is our virtual ID for surfaces that don't own a native window.
-                var rhiDevice = RHISystem.GetOrCreateDevice(0xFFFFFFFF);
+                // Use the default virtual ID for engine-level headless RHI bootstrapping.
+                var rhiDevice = RHISystem.GetOrCreateDevice(RHISystem.DefaultVirtualSurfaceID);
                 
                 // 3. Set a high-fidelity default resolution (1080p) for the virtual surface.
                 // The modern RHI will lazily allocate the swapchain on the first frame using these dimensions.

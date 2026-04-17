@@ -14,6 +14,19 @@ public readonly struct RHISwapChain
         Handle = handle;
     }
 
+    public RHIImageHandle BeginFrame(uint frameIndex)
+    {
+        if (!IsValid) return RHIImageHandle.Invalid;
+        ulong packed = RHISwapChainAPI.RHISwapChain_BeginFrame(Handle, frameIndex);
+        unsafe { return *(RHIImageHandle*)&packed; }
+    }
+
+    public void EndFrame(uint frameIndex)
+    {
+        if (!IsValid) return;
+        RHISwapChainAPI.RHISwapChain_EndFrame(Handle, frameIndex);
+    }
+
     public IntPtr GetSharedWin32Handle(uint index)
     {
         if (!IsValid) return IntPtr.Zero;

@@ -7,10 +7,16 @@ public static class RHISystem
 {
     private static RHIInstance? m_Instance;
     private static readonly ConcurrentDictionary<uint, RHIDevice> m_DeviceWrappers = new();
+    
+    /// <summary>High-bit flag identifying a virtual/headless surface that does not own a native window.</summary>
+    public const uint VirtualSurfaceIDMask = 0x80000000;
+    
+    /// <summary>Default virtual surface ID used for engine-level headless RHI bootstrapping.</summary>
+    public const uint DefaultVirtualSurfaceID = VirtualSurfaceIDMask | 0x0;
     private static bool m_PhysicalDevicePicked = false;
 
     public static RHIInstance? Instance => m_Instance;
-    public static RHIDevice GetOrCreateDevice(uint windowId)
+    public static RHIDevice GetOrCreateDevice(uint windowId, uint width = 0, uint height = 0)
     {
         if (m_Instance == null)
             throw new InvalidOperationException("RHISystem must be initialized before creating devices.");
@@ -26,7 +32,7 @@ public static class RHISystem
 
         // Ensure a surface exists for this window before creating the device
         // This is critical for the native RHI to correctly associate the device with a surface pointer.
-        m_Instance.Value.CreateSurface(windowId);
+        m_Instance.Value.CreateSurface(windowId, width, height);
 
         var device = m_Instance.Value.CreateDevice(windowId);
         m_DeviceWrappers.TryAdd(windowId, device);

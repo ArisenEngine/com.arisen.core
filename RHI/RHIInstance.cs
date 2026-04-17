@@ -23,9 +23,9 @@ public readonly struct RHIInstance
         RHIInstanceAPI.RHIInstance_InitLogicDevices(Handle);
     }
 
-    public void CreateSurface(uint windowId)
+    public void CreateSurface(uint windowId, uint width = 0, uint height = 0)
     {
-        RHIInstanceAPI.RHIInstance_CreateSurface(Handle, windowId);
+        RHIInstanceAPI.RHIInstance_CreateSurface(Handle, windowId, width, height);
     }
 
     /// <summary>

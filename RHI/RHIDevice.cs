@@ -5,7 +5,7 @@ namespace ArisenEngine.Core.RHI;
 
 public readonly struct RHIDevice
 {
-    internal IntPtr Handle { get; }
+    public IntPtr Handle { get; }
 
     public bool IsValid => Handle != IntPtr.Zero;
 

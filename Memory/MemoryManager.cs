@@ -10,6 +10,7 @@ public static class MemoryManager
     public static void Initialize(uint frameArenaSizeMB = 64)
     {
         s_FrameArena = new FrameArena(frameArenaSizeMB);
+        ArisenKernel.Lifecycle.EngineKernel.Instance.OnFrameEnd += () => s_FrameArena?.Reset();
     }
 
     public static void Shutdown()

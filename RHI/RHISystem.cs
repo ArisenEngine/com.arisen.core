@@ -7,6 +7,7 @@ public static class RHISystem
 {
     private static RHIInstance? m_Instance;
     private static readonly ConcurrentDictionary<uint, RHIDevice> m_DeviceWrappers = new();
+    private static readonly object m_SyncRoot = new();
     
     /// <summary>High-bit flag identifying a virtual/headless surface that does not own a native window.</summary>
     public const uint VirtualSurfaceIDMask = 0x80000000;
@@ -21,23 +22,42 @@ public static class RHISystem
         if (m_Instance == null)
             throw new InvalidOperationException("RHISystem must be initialized before creating devices.");
 
+        // Fast path for existing devices
         if (m_DeviceWrappers.TryGetValue(windowId, out var cachedDevice))
             return cachedDevice;
 
-        if (!m_PhysicalDevicePicked)
+        lock (m_SyncRoot)
         {
-            m_Instance.Value.PickPhysicalDevice(true);
-            m_PhysicalDevicePicked = true;
+            // Re-check after acquiring lock
+            if (m_DeviceWrappers.TryGetValue(windowId, out cachedDevice))
+                return cachedDevice;
+
+            if (!m_PhysicalDevicePicked)
+            {
+                m_Instance.Value.PickPhysicalDevice(true);
+                m_PhysicalDevicePicked = true;
+            }
+
+            // Ensure a surface exists for this window before creating the device
+            m_Instance.Value.CreateSurface(windowId, width, height);
+
+            var device = m_Instance.Value.CreateDevice(windowId);
+            m_DeviceWrappers.TryAdd(windowId, device);
+
+            return device;
         }
+    }
 
-        // Ensure a surface exists for this window before creating the device
-        // This is critical for the native RHI to correctly associate the device with a surface pointer.
-        m_Instance.Value.CreateSurface(windowId, width, height);
-
-        var device = m_Instance.Value.CreateDevice(windowId);
-        m_DeviceWrappers.TryAdd(windowId, device);
-
-        return device;
+    public static void RemoveDevice(uint windowId)
+    {
+        lock (m_SyncRoot)
+        {
+            if (m_DeviceWrappers.TryRemove(windowId, out var device))
+            {
+                // Note: The native device is destroyed in RHI 
+                // when the C# RHIDevice object is disposed or collected.
+            }
+        }
     }
 
     public static bool Initialize(GraphicsAPI api, string appName = "ArisenApp", bool validationLayer = false)

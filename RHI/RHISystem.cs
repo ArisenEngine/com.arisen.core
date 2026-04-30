@@ -7,6 +7,7 @@ public static class RHISystem
 {
     private static RHIInstance? m_Instance;
     private static readonly ConcurrentDictionary<uint, RHIDevice> m_DeviceWrappers = new();
+    private static RHIDevice? m_MasterDevice;
     private static readonly object m_SyncRoot = new();
     
     /// <summary>High-bit flag identifying a virtual/headless surface that does not own a native window.</summary>
@@ -28,9 +29,14 @@ public static class RHISystem
 
         lock (m_SyncRoot)
         {
+            // Always ensure the surface exists for the specific windowId
+            m_Instance.Value.CreateSurface(windowId, width, height);
+
             // Re-check after acquiring lock
-            if (m_DeviceWrappers.TryGetValue(windowId, out cachedDevice))
-                return cachedDevice;
+            if (m_MasterDevice.HasValue && m_MasterDevice.Value.IsValid)
+            {
+                return m_MasterDevice.Value;
+            }
 
             if (!m_PhysicalDevicePicked)
             {
@@ -38,11 +44,16 @@ public static class RHISystem
                 m_PhysicalDevicePicked = true;
             }
 
-            // Ensure a surface exists for this window before creating the device
-            m_Instance.Value.CreateSurface(windowId, width, height);
-
+            Console.WriteLine($"[RHI] Creating Unified Logical Device for initial Window: 0x{windowId:X}");
+            
+            // Create the first logical device.
             var device = m_Instance.Value.CreateDevice(windowId);
-            m_DeviceWrappers.TryAdd(windowId, device);
+            
+            if (device.IsValid)
+            {
+                m_MasterDevice = device;
+                m_DeviceWrappers.TryAdd(windowId, device);
+            }
 
             return device;
         }

@@ -21,7 +21,7 @@ namespace ArisenEngine.Core.RHI
         /// <param name="color">Optional RGBA color array (0.0 to 1.0).</param>
         /// <returns>A disposable marker context.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static RHICommandBufferDebugMarker BeginDebugMarker(this RHICommandBuffer cb, string name, float[] color = null)
+        public static RHICommandBufferDebugMarker BeginDebugMarker(this RHICommandBuffer cb, string name, float[]? color = null)
         {
 #if ARISEN_PROFILER_ENABLED
             RHICommandBufferAPI.RHICommandBuffer_BeginDebugLabel(cb.NativePtr, name, color ?? DefaultColor);
@@ -40,7 +40,7 @@ namespace ArisenEngine.Core.RHI
         /// <param name="color">Optional RGBA color array (0.0 to 1.0).</param>
         [Conditional("ARISEN_PROFILER_ENABLED")]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void InsertDebugMarker(this RHICommandBuffer cb, string name, float[] color = null)
+        public static void InsertDebugMarker(this RHICommandBuffer cb, string name, float[]? color = null)
         {
             RHICommandBufferAPI.RHICommandBuffer_InsertDebugMarker(cb.NativePtr, name, color ?? DefaultColor);
         }

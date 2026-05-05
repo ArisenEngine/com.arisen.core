@@ -13,7 +13,7 @@ public class CorePackage : IPackageEntry
 {
     public void OnLoad(IServiceRegistry registry)
     {
-        NativeRuntime.Initialize(registry);
+        NativeRuntime.InitializeDiagnostics(registry);
         
         // Register early engine subsystems
         EngineKernel.Instance.RegisterSubsystem(new EnvironmentSubsystem());

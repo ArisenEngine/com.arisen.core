@@ -129,6 +129,20 @@ public readonly struct RHICommandBuffer
             (int)targetLayout);
     }
 
+    /// <summary>
+    /// Transition with a Vulkan-style queue-family ownership transfer. Pass
+    /// <see cref="RHIQueueFamily.External"/> as <paramref name="dstQueueFamilyIndex"/> to release
+    /// a shared image to an external API (e.g. D3D11 via a Win32 NT handle), or as
+    /// <paramref name="srcQueueFamilyIndex"/> to acquire ownership back before writing again.
+    /// </summary>
+    public void TransitionImageLayout(RHIImageHandle image, EImageLayout oldLayout, EImageLayout targetLayout,
+                                       uint srcQueueFamilyIndex, uint dstQueueFamilyIndex)
+    {
+        RHICommandBufferExtAPI.RHICommandBuffer_TransitionImageLayoutWithQueueFamily(
+            NativePtr, image, (int)oldLayout, (int)targetLayout,
+            srcQueueFamilyIndex, dstQueueFamilyIndex);
+    }
+
     public void BindDescriptorSets(EPipelineBindPoint bindPoint, uint firstSet, RHIDescriptorPoolHandle poolHandle,
         uint poolId)
     {

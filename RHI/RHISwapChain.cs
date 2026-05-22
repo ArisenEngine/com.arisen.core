@@ -33,6 +33,30 @@ public readonly struct RHISwapChain
         return RHISwapChainAPI.RHISwapChain_GetSharedWin32Handle(Handle, index);
     }
 
+    public ulong GetSharedMemorySize(uint index)
+    {
+        if (!IsValid) return 0;
+        return RHISwapChainAPI.RHISwapChain_GetSharedMemorySize(Handle, index);
+    }
+
+    public IntPtr GetRenderFinishedSemaphoreWin32Handle(uint frameIndex)
+    {
+        if (!IsValid) return IntPtr.Zero;
+        return RHISwapChainAPI.RHISwapChain_GetRenderFinishedSemaphoreWin32Handle(Handle, frameIndex);
+    }
+
+    public IntPtr CreateConsumedSemaphoreWin32Handle(uint frameIndex)
+    {
+        if (!IsValid) return IntPtr.Zero;
+        return RHISwapChainAPI.RHISwapChain_CreateConsumedSemaphoreWin32Handle(Handle, frameIndex);
+    }
+
+    public void ReleaseConsumedSemaphoreWin32Handle(IntPtr handle)
+    {
+        if (!IsValid || handle == IntPtr.Zero) return;
+        RHISwapChainAPI.RHISwapChain_ReleaseConsumedSemaphoreWin32Handle(Handle, handle);
+    }
+
     public RHIImageViewHandle GetImageView(uint frameIndex)
     {
         if (!IsValid) return RHIImageViewHandle.Invalid;

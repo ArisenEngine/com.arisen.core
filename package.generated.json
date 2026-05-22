@@ -1,0 +1,6 @@
+{
+  "entry": {
+    "assembly": "Com.Arisen.Core.dll",
+    "class": "ArisenEngine.Core.CorePackage"
+  }
+}

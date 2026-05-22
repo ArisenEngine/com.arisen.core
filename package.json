@@ -8,6 +8,13 @@
     "assembly": "Com.Arisen.Core.dll",
     "class": "ArisenEngine.Core.CorePackage"
   },
+  "subsystems": [
+    {
+      "class": "ArisenEngine.Core.Lifecycle.EnvironmentSubsystem",
+      "phase": "PreInit",
+      "priority": 0
+    }
+  ],
   "dependencies": {
     "com.arisen.core.native": "1.0.0"
   }

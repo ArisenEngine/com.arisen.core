@@ -9,6 +9,12 @@
     "assembly": "Com.Arisen.Core.dll",
     "class": "ArisenEngine.Core.CorePackage"
   },
+  "services": {
+    "provides": [
+      "ArisenKernel.Contracts.ILogger",
+      "ArisenEngine.Core.Automation.ICommandManager"
+    ]
+  },
   "subsystems": [
     {
       "class": "ArisenEngine.Core.Lifecycle.EnvironmentSubsystem",

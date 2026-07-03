@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Security;
 using Arisen.Native.Diagnostics;
 
 namespace ArisenEngine.Core.Diagnostics;
@@ -43,7 +46,15 @@ public static class Profiler
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void FrameMarkNamed(string name)
     {
-        ProfilerAPI.Profiler_FrameMarkNamed(name);
+#if ARISEN_PROFILER_ENABLED
+        if (string.IsNullOrEmpty(name))
+        {
+            ProfilerAPI.Profiler_FrameMark();
+            return;
+        }
+
+        NativeProfilerLabelAPI.Profiler_FrameMarkNamed(ProfilerLabelCache.Get(name));
+#endif
     }
 
     /// <summary>
@@ -55,7 +66,14 @@ public static class Profiler
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void PlotValue(string name, double value)
     {
-        ProfilerAPI.Profiler_PlotValue(name, value);
+#if ARISEN_PROFILER_ENABLED
+        if (string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        NativeProfilerLabelAPI.Profiler_PlotValue(ProfilerLabelCache.Get(name), value);
+#endif
     }
 
     /// <summary>
@@ -66,9 +84,43 @@ public static class Profiler
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void SetThreadName(string name)
     {
-        ProfilerAPI.Profiler_SetThreadName(name);
+#if ARISEN_PROFILER_ENABLED
+        if (string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        NativeProfilerLabelAPI.Profiler_SetThreadName(ProfilerLabelCache.Get(name));
+#endif
     }
 }
+
+#if ARISEN_PROFILER_ENABLED
+internal static class ProfilerLabelCache
+{
+    private static readonly ConcurrentDictionary<string, IntPtr> s_Labels = new(StringComparer.Ordinal);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static IntPtr Get(string? name)
+    {
+        return s_Labels.GetOrAdd(name!, static value => Marshal.StringToCoTaskMemUTF8(value));
+    }
+}
+
+internal static class NativeProfilerLabelAPI
+{
+    private const string DllName = "Core.Diagnostic.dll";
+
+    [SuppressUnmanagedCodeSecurity, DllImport(DllName, EntryPoint = "Profiler_FrameMarkNamed", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void Profiler_FrameMarkNamed(IntPtr name);
+
+    [SuppressUnmanagedCodeSecurity, DllImport(DllName, EntryPoint = "Profiler_PlotValue", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void Profiler_PlotValue(IntPtr name, double value);
+
+    [SuppressUnmanagedCodeSecurity, DllImport(DllName, EntryPoint = "Profiler_SetThreadName", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void Profiler_SetThreadName(IntPtr name);
+}
+#endif
 
 /// <summary>
 /// A disposable handle for a profiling zone.
@@ -91,7 +143,7 @@ public readonly struct ProfilerZone : IDisposable
     public void Dispose()
     {
 #if ARISEN_PROFILER_ENABLED
-        if (_ctx.Active != 0)
+        if (_ctx.Handle != 0)
         {
             ProfilerAPI.Profiler_EndZone(_ctx);
         }

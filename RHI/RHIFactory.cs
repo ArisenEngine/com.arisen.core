@@ -36,12 +36,27 @@ public readonly struct RHIFactory
     public unsafe RHIImageHandle CreateImage(uint width, uint height, uint depth, uint mipLevels, uint arrayLayers,
         EFormat format, string name)
     {
+        return CreateImage(
+            width,
+            height,
+            depth,
+            mipLevels,
+            arrayLayers,
+            format,
+            (uint)EImageUsageFlagBits.IMAGE_USAGE_SAMPLED_BIT,
+            ERHIMemoryUsage.GpuOnly,
+            name);
+    }
+
+    public unsafe RHIImageHandle CreateImage(uint width, uint height, uint depth, uint mipLevels, uint arrayLayers,
+        EFormat format, uint usage, ERHIMemoryUsage memoryUsage, string name)
+    {
         uint index = 0;
         uint gen = 0;
 
         // imageType 1 = 2D, tiling 0 = Optimal, layout 0 = Undefined, samples 1 = 1x
         RHIFactoryAPI.RHIFactory_CreateImage(Handle, 1, width, height, depth, mipLevels, arrayLayers, (int)format, 0, 0,
-            0, 1, 0, 0, name, (IntPtr)(&index), (IntPtr)(&gen));
+            usage, 1, 0, (int)memoryUsage, name, (IntPtr)(&index), (IntPtr)(&gen));
 
         return new RHIImageHandle { Index = index, Generation = gen };
     }
@@ -49,6 +64,40 @@ public readonly struct RHIFactory
     public void ReleaseImage(RHIImageHandle handle)
     {
         RHIFactoryAPI.RHIFactory_ReleaseImage(Handle, handle.Index, handle.Generation);
+    }
+
+    public unsafe RHIImageViewHandle CreateImageView(
+        RHIImageHandle image,
+        EImageViewType viewType,
+        EFormat format,
+        uint aspectMask,
+        uint baseMipLevel,
+        uint levelCount,
+        uint baseArrayLayer,
+        uint layerCount)
+    {
+        uint index = 0;
+        uint gen = 0;
+        RHIFactoryAPI.RHIFactory_CreateImageView(
+            Handle,
+            image.Index,
+            image.Generation,
+            (int)viewType,
+            (int)format,
+            aspectMask,
+            baseMipLevel,
+            levelCount,
+            baseArrayLayer,
+            layerCount,
+            (IntPtr)(&index),
+            (IntPtr)(&gen));
+
+        return new RHIImageViewHandle { Index = index, Generation = gen };
+    }
+
+    public void ReleaseImageView(RHIImageViewHandle handle)
+    {
+        RHIFactoryAPI.RHIFactory_ReleaseImageView(Handle, handle.Index, handle.Generation);
     }
 
     public IntPtr MapBuffer(RHIBufferHandle handle)
@@ -104,6 +153,26 @@ public readonly struct RHIFactory
         return new RHISamplerHandle { Index = index, Generation = gen };
     }
 
+    public void ReleaseSampler(RHISamplerHandle handle)
+    {
+        RHIFactoryAPI.RHIFactory_ReleaseSampler(Handle, handle.Index, handle.Generation);
+    }
+
+    public uint RegisterBindlessResourceImage(RHIImageViewHandle handle)
+    {
+        return RHIFactoryAPI.RHIFactory_RegisterBindlessResourceImage(Handle, handle.Index, handle.Generation);
+    }
+
+    public uint RegisterBindlessResourceBuffer(RHIBufferHandle handle)
+    {
+        return RHIFactoryAPI.RHIFactory_RegisterBindlessResourceBuffer(Handle, handle.Index, handle.Generation);
+    }
+
+    public uint RegisterBindlessResourceSampler(RHISamplerHandle handle)
+    {
+        return RHIFactoryExtAPI.RHIFactory_RegisterBindlessResourceSampler(Handle, handle.Index, handle.Generation);
+    }
+
     public unsafe RHIShaderProgramHandle CreateGPUProgram()
     {
         uint index = 0;
@@ -124,12 +193,18 @@ public readonly struct RHIFactory
 
     public bool AttachProgramByteCode(RHIShaderProgramHandle handle, EShaderStage stage, byte[] code, string entryPoint)
     {
+        return AttachProgramByteCode(handle, stage, code.AsMemory(), entryPoint);
+    }
+
+    public bool AttachProgramByteCode(RHIShaderProgramHandle handle, EShaderStage stage, ReadOnlyMemory<byte> code, string entryPoint)
+    {
         unsafe
         {
-            fixed (byte* pCode = code)
+            var span = code.Span;
+            fixed (byte* pCode = span)
             {
                 return RHIFactoryAPI.RHIFactory_AttachProgramByteCode(Handle, handle.Index, handle.Generation, (int)stage,
-                    (IntPtr)pCode, (ulong)code.Length, entryPoint) != 0;
+                    (IntPtr)pCode, (ulong)span.Length, entryPoint) != 0;
             }
         }
     }

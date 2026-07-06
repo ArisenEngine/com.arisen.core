@@ -160,6 +160,24 @@ public readonly struct RHICommandBuffer
         RHICommandBufferAPI.RHICommandBuffer_CopyBuffer(NativePtr, src, srcOffset, dst, dstOffset, size);
     }
 
+    public void CopyBufferToImage2D(
+        RHIBufferHandle src,
+        RHIImageHandle dst,
+        EImageLayout dstImageLayout,
+        ulong bufferOffset,
+        uint width,
+        uint height)
+    {
+        RHICommandBufferExtAPI.RHICommandBuffer_CopyBufferToImage2D(
+            NativePtr,
+            src,
+            dst,
+            (int)dstImageLayout,
+            bufferOffset,
+            width,
+            height);
+    }
+
     public void Dispatch(uint groupCountX, uint groupCountY, uint groupCountZ)
     {
         RHICommandBufferAPI.RHICommandBuffer_Dispatch(NativePtr, groupCountX, groupCountY, groupCountZ);

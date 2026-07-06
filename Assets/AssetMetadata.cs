@@ -19,6 +19,11 @@ public class AssetMetadata : ISerializationCallbackReceiver
     /// </summary>
     public string AssetType { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Optional importer identifier. Empty keeps legacy metadata valid.
+    /// </summary>
+    public string Importer { get; set; } = string.Empty;
+
     public void OnAfterDeserialize()
     {
     }

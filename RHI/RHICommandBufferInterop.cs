@@ -34,6 +34,15 @@ namespace Arisen.Native.RHI
 
         [SuppressUnmanagedCodeSecurity, DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern uint RHIFactory_RegisterBindlessResourceSampler(IntPtr f, uint index, uint generation);
+
+        [SuppressUnmanagedCodeSecurity, DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void RHIFactory_UnregisterBindlessResourceImage(IntPtr f, uint bindlessIndex);
+
+        [SuppressUnmanagedCodeSecurity, DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void RHIFactory_UnregisterBindlessResourceBuffer(IntPtr f, uint bindlessIndex);
+
+        [SuppressUnmanagedCodeSecurity, DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void RHIFactory_UnregisterBindlessResourceSampler(IntPtr f, uint bindlessIndex);
     }
 
     /// <summary>

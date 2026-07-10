@@ -173,6 +173,21 @@ public readonly struct RHIFactory
         return RHIFactoryExtAPI.RHIFactory_RegisterBindlessResourceSampler(Handle, handle.Index, handle.Generation);
     }
 
+    public void UnregisterBindlessResourceImage(uint bindlessIndex)
+    {
+        RHIFactoryExtAPI.RHIFactory_UnregisterBindlessResourceImage(Handle, bindlessIndex);
+    }
+
+    public void UnregisterBindlessResourceBuffer(uint bindlessIndex)
+    {
+        RHIFactoryExtAPI.RHIFactory_UnregisterBindlessResourceBuffer(Handle, bindlessIndex);
+    }
+
+    public void UnregisterBindlessResourceSampler(uint bindlessIndex)
+    {
+        RHIFactoryExtAPI.RHIFactory_UnregisterBindlessResourceSampler(Handle, bindlessIndex);
+    }
+
     public unsafe RHIShaderProgramHandle CreateGPUProgram()
     {
         uint index = 0;

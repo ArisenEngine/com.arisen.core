@@ -9,6 +9,7 @@ public static class RHISystem
     private static readonly ConcurrentDictionary<uint, RHIDevice> m_DeviceWrappers = new();
     private static RHIDevice? m_MasterDevice;
     private static readonly object m_SyncRoot = new();
+    private static string m_LastInitializationError = string.Empty;
     
     /// <summary>High-bit flag identifying a virtual/headless surface that does not own a native window.</summary>
     public const uint VirtualSurfaceIDMask = 0x80000000;
@@ -18,6 +19,7 @@ public static class RHISystem
     private static bool m_PhysicalDevicePicked = false;
 
     public static RHIInstance? Instance => m_Instance;
+    public static string LastInitializationError => m_LastInitializationError;
     public static RHIDevice GetOrCreateDevice(uint windowId, uint width = 0, uint height = 0)
     {
         if (m_Instance == null)
@@ -73,6 +75,8 @@ public static class RHISystem
 
     public static bool Initialize(GraphicsAPI api, string appName = "ArisenApp", bool validationLayer = false)
     {
+        m_LastInitializationError = string.Empty;
+
         try
         {
             // 1. Set the graphics API
@@ -88,15 +92,24 @@ public static class RHISystem
             );
 
             if (instHandle == IntPtr.Zero)
+            {
+                m_LastInitializationError = RHILoader.GetLastErrorMessage();
+                if (string.IsNullOrWhiteSpace(m_LastInitializationError))
+                {
+                    m_LastInitializationError = "Native RHI instance creation returned null without a diagnostic message.";
+                }
+
                 return false;
+            }
 
             m_Instance = new RHIInstance(instHandle);
 
             // 3. Defer Physical Device picking until Surface is created (handled by user/test framework).
             return true;
         }
-        catch (Exception)
+        catch (Exception e)
         {
+            m_LastInitializationError = e.Message;
             return false;
         }
     }
@@ -111,5 +124,6 @@ public static class RHISystem
         }
 
         RHILoaderAPI.RHILoader_Dispose();
+        m_LastInitializationError = string.Empty;
     }
 }

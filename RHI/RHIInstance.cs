@@ -1,4 +1,5 @@
 using Arisen.Native.RHI;
+using System.Runtime.InteropServices;
 
 namespace ArisenEngine.Core.RHI;
 
@@ -20,9 +21,32 @@ public readonly struct RHIInstance
     public uint MaxFramesInFlight =>
         IsValid ? RHIInstanceAPI.RHIInstance_GetMaxFramesInFlight(Handle) : 0;
 
+    public string AdapterName =>
+        IsValid ? NativeUtf8ToString(RHIInstanceAPI.RHIInstance_GetAdapterName(Handle)) : string.Empty;
+
+    public string AdapterTypeName =>
+        IsValid ? NativeUtf8ToString(RHIInstanceAPI.RHIInstance_GetAdapterTypeName(Handle)) : string.Empty;
+
+    public string AdapterDriverInfo =>
+        IsValid ? NativeUtf8ToString(RHIInstanceAPI.RHIInstance_GetAdapterDriverInfo(Handle)) : string.Empty;
+
+    public string EnabledInstanceExtensions =>
+        IsValid ? NativeUtf8ToString(RHIInstanceAPI.RHIInstance_GetEnabledInstanceExtensions(Handle)) : string.Empty;
+
+    public string EnabledDeviceExtensions =>
+        IsValid ? NativeUtf8ToString(RHIInstanceAPI.RHIInstance_GetEnabledDeviceExtensions(Handle)) : string.Empty;
+
+    public string MissingDeviceExtensions =>
+        IsValid ? NativeUtf8ToString(RHIInstanceAPI.RHIInstance_GetMissingDeviceExtensions(Handle)) : string.Empty;
+
     public RHIInstance(IntPtr handle)
     {
         Handle = handle;
+    }
+
+    private static string NativeUtf8ToString(IntPtr value)
+    {
+        return value == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUTF8(value) ?? string.Empty;
     }
 
     public void PickPhysicalDevice(bool considerSurface)

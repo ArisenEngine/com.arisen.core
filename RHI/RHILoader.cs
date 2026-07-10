@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using Arisen.Native.RHI;
 
 namespace ArisenEngine.Core.RHI
@@ -27,6 +28,12 @@ namespace ArisenEngine.Core.RHI
         public static void Unload()
         {
             RHILoaderAPI.RHILoader_Dispose();
+        }
+
+        public static string GetLastErrorMessage()
+        {
+            var value = RHILoaderDiagnosticsAPI.RHILoader_GetLastErrorMessage();
+            return value == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUTF8(value) ?? string.Empty;
         }
     }
 }

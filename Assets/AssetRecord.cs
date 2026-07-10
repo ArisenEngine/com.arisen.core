@@ -34,11 +34,30 @@ public sealed record LoadedCookedAssetDiagnostic(
     int RefCount,
     long SizeInBytes);
 
+public enum AssetChangeKind
+{
+    Created,
+    Changed,
+    Deleted,
+    Renamed,
+    CookedInvalidated
+}
+
+public readonly record struct AssetChangeEvent(
+    AssetChangeKind Kind,
+    Guid Guid,
+    string AssetType,
+    string SourcePath,
+    string PreviousSourcePath,
+    string PackageId);
+
 public interface IAssetDatabase
 {
     string CookedRoot { get; }
 
     IReadOnlyCollection<AssetRecord> Assets { get; }
+
+    event Action<AssetChangeEvent>? AssetChanged;
 
     bool TryGetAsset(Guid guid, out AssetRecord asset);
 
@@ -57,6 +76,10 @@ public interface IAssetDatabase
     void Release(CookedAssetHandle handle);
 
     void ReleaseAllLoadedCookedAssets();
+
+    int InvalidateCookedAssets(Guid guid, string? variant = null);
+
+    void NotifyAssetChanged(AssetChangeEvent change);
 
     IReadOnlyList<LoadedCookedAssetDiagnostic> GetLoadedCookedAssetDiagnostics();
 }

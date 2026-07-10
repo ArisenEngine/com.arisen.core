@@ -67,6 +67,15 @@ public readonly struct RHIPipelineState
             (int)colorOp);
     }
 
+    public void SetDepthStencilState(bool depthTestEnable, bool depthWriteEnable, ECompareOp depthCompareOp)
+    {
+        RHIPipelineAPI.RHIPipelineState_SetDepthStencilState(
+            NativePtr,
+            depthTestEnable ? 1 : 0,
+            depthWriteEnable ? 1 : 0,
+            (int)depthCompareOp);
+    }
+
     public void SetDynamicStateMask(ulong mask)
     {
         RHIPipelineAPI.RHIPipelineState_SetDynamicStateMask(NativePtr, mask);

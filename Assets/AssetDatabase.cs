@@ -28,6 +28,8 @@ public class AssetDatabase : IAssetDatabase
 
     public IReadOnlyCollection<AssetRecord> Assets => m_AssetRegistry.Values;
 
+    public event Action<AssetChangeEvent>? AssetChanged;
+
     /// <summary>
     /// Scans the given project directory to index all assets and automatically provisions missing .meta files.
     /// </summary>
@@ -122,10 +124,12 @@ public class AssetDatabase : IAssetDatabase
             }
             else
             {
+                var assetType = InferAssetType(filePath);
                 meta = new AssetMetadata
                 {
                     Guid = Guid.NewGuid(),
-                    AssetType = InferAssetType(filePath)
+                    AssetType = assetType,
+                    Importer = InferImporter(filePath, assetType)
                 };
                 
                 try 
@@ -140,9 +144,30 @@ public class AssetDatabase : IAssetDatabase
                 }
             }
 
+            var metadataChanged = false;
             if (string.IsNullOrWhiteSpace(meta.AssetType))
             {
                 meta.AssetType = InferAssetType(filePath);
+                metadataChanged = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(meta.Importer))
+            {
+                meta.Importer = InferImporter(filePath, meta.AssetType);
+                metadataChanged = true;
+            }
+
+            if (metadataChanged)
+            {
+                try
+                {
+                    SerializationUtil.Serialize(meta, metaPath);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to update metadata file for {filePath}: {ex.Message}");
+                    continue;
+                }
             }
 
             var fullPath = Path.GetFullPath(filePath);
@@ -332,6 +357,57 @@ public class AssetDatabase : IAssetDatabase
         }
     }
 
+    public int InvalidateCookedAssets(Guid guid, string? variant = null)
+    {
+        if (guid == Guid.Empty)
+        {
+            return 0;
+        }
+
+        int releasedCount = ReleaseLoadedCookedAssets(guid, variant);
+
+        var registryKeys = m_CookedRegistry.Keys
+            .Where(key => IsCookedKeyMatch(key, guid, variant))
+            .ToArray();
+
+        foreach (string key in registryKeys)
+        {
+            m_CookedRegistry.Remove(key);
+        }
+
+        if (registryKeys.Length > 0)
+        {
+            SaveCookedManifest();
+        }
+
+        if (releasedCount > 0 || registryKeys.Length > 0)
+        {
+            m_AssetRegistry.TryGetValue(guid, out var asset);
+            NotifyAssetChanged(new AssetChangeEvent(
+                AssetChangeKind.CookedInvalidated,
+                guid,
+                asset?.AssetType ?? string.Empty,
+                asset?.SourcePath ?? string.Empty,
+                string.Empty,
+                asset?.PackageId ?? string.Empty));
+
+            Logger.Info(
+                $"[AssetDatabase] Invalidated cooked asset {guid} | Variant: {variant ?? "<all>"} | LoadedReleased: {releasedCount} | RegistryRemoved: {registryKeys.Length}");
+        }
+
+        return releasedCount;
+    }
+
+    public void NotifyAssetChanged(AssetChangeEvent change)
+    {
+        if (change.Guid == Guid.Empty)
+        {
+            return;
+        }
+
+        AssetChanged?.Invoke(change);
+    }
+
     public IReadOnlyList<LoadedCookedAssetDiagnostic> GetLoadedCookedAssetDiagnostics()
     {
         var diagnostics = new List<LoadedCookedAssetDiagnostic>(m_LoadedCookedAssetSlotsByKey.Count);
@@ -404,17 +480,53 @@ public class AssetDatabase : IAssetDatabase
             ".jpg" => "Texture2D",
             ".jpeg" => "Texture2D",
             ".ppm" => "Texture2D",
+            ".arismaterial" => "Material",
+            ".material" => "Material",
             ".armesh" => "Mesh",
+            ".obj" => "Mesh",
             ".gltf" => "Mesh",
             ".glb" => "Mesh",
+            ".bin" => "AssetDependency",
             ".fbx" => "Mesh",
             _ => extension.TrimStart('.')
+        };
+    }
+
+    private static string InferImporter(string filePath, string assetType)
+    {
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+        return extension switch
+        {
+            ".hlsl" => "HlslShader",
+            ".shader" => "ShaderLab",
+            ".ppm" => "PpmTextureImporter",
+            ".png" or ".jpg" or ".jpeg" => "ImageTextureImporter",
+            ".arismaterial" or ".material" => "ArisenMaterialImporter",
+            ".armesh" => "ArisenTextMeshImporter",
+            ".obj" => "ObjMeshImporter",
+            ".gltf" or ".glb" => "GltfMeshImporter",
+            ".bin" => "GltfBufferDependency",
+            ".fbx" => "FbxMeshImporter",
+            _ when !string.IsNullOrWhiteSpace(assetType) => assetType + "Importer",
+            _ => "Default"
         };
     }
 
     private static string MakeCookedKey(Guid guid, string variant)
     {
         return $"{guid:N}:{variant}";
+    }
+
+    private static bool IsCookedKeyMatch(string key, Guid guid, string? variant)
+    {
+        string prefix = $"{guid:N}:";
+        if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(variant)
+            || string.Equals(key.Substring(prefix.Length), variant, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string SanitizeFileName(string value)
@@ -470,6 +582,33 @@ public class AssetDatabase : IAssetDatabase
 
         slot = candidate;
         return true;
+    }
+
+    private int ReleaseLoadedCookedAssets(Guid guid, string? variant)
+    {
+        int releasedCount = 0;
+
+        for (int i = 0; i < m_LoadedCookedAssetSlots.Count; i++)
+        {
+            var slot = m_LoadedCookedAssetSlots[i];
+            if (!slot.IsOccupied || slot.Guid != guid)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(variant)
+                && !string.Equals(slot.Variant, variant, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            m_LoadedCookedAssetSlotsByKey.Remove(slot.Key);
+            slot.Reset();
+            m_FreeLoadedCookedAssetSlots.Push(i);
+            releasedCount++;
+        }
+
+        return releasedCount;
     }
 
     private void LoadCookedManifest()

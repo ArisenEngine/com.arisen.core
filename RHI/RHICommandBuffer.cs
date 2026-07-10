@@ -74,6 +74,50 @@ public readonly struct RHICommandBuffer
             x, y, width, height);
     }
 
+    public void BeginRendering(
+        RHIImageViewHandle colorImageView,
+        EImageLayout imageLayout,
+        EAttachmentLoadOp loadOp,
+        EAttachmentStoreOp storeOp,
+        float clearR,
+        float clearG,
+        float clearB,
+        float clearA,
+        RHIImageViewHandle depthImageView,
+        EImageLayout depthImageLayout,
+        EAttachmentLoadOp depthLoadOp,
+        EAttachmentStoreOp depthStoreOp,
+        float clearDepth,
+        uint clearStencil,
+        int x,
+        int y,
+        uint width,
+        uint height)
+    {
+        RHICommandBufferAPI.RHICommandBuffer_BeginRenderingWithDepth(
+            NativePtr,
+            colorImageView.Index,
+            colorImageView.Generation,
+            (int)imageLayout,
+            (int)loadOp,
+            (int)storeOp,
+            clearR,
+            clearG,
+            clearB,
+            clearA,
+            depthImageView.Index,
+            depthImageView.Generation,
+            (int)depthImageLayout,
+            (int)depthLoadOp,
+            (int)depthStoreOp,
+            clearDepth,
+            clearStencil,
+            x,
+            y,
+            width,
+            height);
+    }
+
     public void EndRendering()
     {
         RHICommandBufferAPI.RHICommandBuffer_EndRendering(NativePtr);
@@ -160,6 +204,74 @@ public readonly struct RHICommandBuffer
         RHICommandBufferAPI.RHICommandBuffer_CopyBuffer(NativePtr, src, srcOffset, dst, dstOffset, size);
     }
 
+    public unsafe void PipelineBarrier(
+        EPipelineStageFlagBits srcStage,
+        EPipelineStageFlagBits dstStage,
+        ReadOnlySpan<RHIBufferMemoryBarrier> bufferBarriers,
+        uint dependency = 0)
+    {
+        fixed (RHIBufferMemoryBarrier* pBufferBarriers = bufferBarriers)
+        {
+            RHICommandBufferAPI.RHICommandBuffer_PipelineBarrier(
+                NativePtr,
+                (int)srcStage,
+                (int)dstStage,
+                dependency,
+                IntPtr.Zero,
+                0,
+                IntPtr.Zero,
+                0,
+                (IntPtr)pBufferBarriers,
+                checked((uint)bufferBarriers.Length));
+        }
+    }
+
+    public unsafe void PipelineBarrier(
+        EPipelineStageFlagBits srcStage,
+        EPipelineStageFlagBits dstStage,
+        ReadOnlySpan<RHIImageMemoryBarrier> imageBarriers,
+        uint dependency = 0)
+    {
+        fixed (RHIImageMemoryBarrier* pImageBarriers = imageBarriers)
+        {
+            RHICommandBufferAPI.RHICommandBuffer_PipelineBarrier(
+                NativePtr,
+                (int)srcStage,
+                (int)dstStage,
+                dependency,
+                IntPtr.Zero,
+                0,
+                (IntPtr)pImageBarriers,
+                checked((uint)imageBarriers.Length),
+                IntPtr.Zero,
+                0);
+        }
+    }
+
+    public unsafe void PipelineBarrier(
+        EPipelineStageFlagBits srcStage,
+        EPipelineStageFlagBits dstStage,
+        ReadOnlySpan<RHIImageMemoryBarrier> imageBarriers,
+        ReadOnlySpan<RHIBufferMemoryBarrier> bufferBarriers,
+        uint dependency = 0)
+    {
+        fixed (RHIImageMemoryBarrier* pImageBarriers = imageBarriers)
+        fixed (RHIBufferMemoryBarrier* pBufferBarriers = bufferBarriers)
+        {
+            RHICommandBufferAPI.RHICommandBuffer_PipelineBarrier(
+                NativePtr,
+                (int)srcStage,
+                (int)dstStage,
+                dependency,
+                IntPtr.Zero,
+                0,
+                (IntPtr)pImageBarriers,
+                checked((uint)imageBarriers.Length),
+                (IntPtr)pBufferBarriers,
+                checked((uint)bufferBarriers.Length));
+        }
+    }
+
     public void CopyBufferToImage2D(
         RHIBufferHandle src,
         RHIImageHandle dst,
@@ -187,4 +299,65 @@ public readonly struct RHICommandBuffer
     {
         RHICommandBufferAPI.RHICommandBuffer_BindDescriptorSet(NativePtr, (int)bindPoint, firstSet, poolHandle, poolId, setIdx);
     }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct RHIBufferMemoryBarrier
+{
+    public EAccessFlag SrcAccessMask;
+    public EAccessFlag DstAccessMask;
+    public uint SrcQueueFamilyIndex;
+    public uint DstQueueFamilyIndex;
+    public RHIBufferHandle Buffer;
+    public EPipelineStageFlagBits SrcStageMask;
+    public EPipelineStageFlagBits DstStageMask;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct RHIImageSubresourceRange
+{
+    public EImageAspectFlagBits AspectMask;
+    public uint BaseMipLevel;
+    public uint LevelCount;
+    public uint BaseArrayLayer;
+    public uint LayerCount;
+
+    public static RHIImageSubresourceRange Color2D()
+    {
+        return new RHIImageSubresourceRange
+        {
+            AspectMask = EImageAspectFlagBits.IMAGE_ASPECT_COLOR_BIT,
+            BaseMipLevel = 0,
+            LevelCount = 1,
+            BaseArrayLayer = 0,
+            LayerCount = 1
+        };
+    }
+
+    public static RHIImageSubresourceRange Depth2D()
+    {
+        return new RHIImageSubresourceRange
+        {
+            AspectMask = EImageAspectFlagBits.IMAGE_ASPECT_DEPTH_BIT,
+            BaseMipLevel = 0,
+            LevelCount = 1,
+            BaseArrayLayer = 0,
+            LayerCount = 1
+        };
+    }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct RHIImageMemoryBarrier
+{
+    public EAccessFlag SrcAccessMask;
+    public EAccessFlag DstAccessMask;
+    public EImageLayout OldLayout;
+    public EImageLayout NewLayout;
+    public uint SrcQueueFamilyIndex;
+    public uint DstQueueFamilyIndex;
+    public RHIImageHandle Image;
+    public RHIImageSubresourceRange SubresourceRange;
+    public EPipelineStageFlagBits SrcStageMask;
+    public EPipelineStageFlagBits DstStageMask;
 }

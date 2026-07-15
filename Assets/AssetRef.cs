@@ -35,9 +35,19 @@ public sealed class MeshSourceAsset
     private MeshSourceAsset() { }
 }
 
+public sealed class ModelSourceAsset
+{
+    private ModelSourceAsset() { }
+}
+
 public sealed class MaterialSourceAsset
 {
     private MaterialSourceAsset() { }
+}
+
+public sealed class SceneSourceAsset
+{
+    private SceneSourceAsset() { }
 }
 
 public static class AssetDatabaseExtensions

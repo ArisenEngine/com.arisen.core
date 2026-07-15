@@ -1,5 +1,6 @@
 using System;
 using ArisenEngine.Core.Serialization;
+using YamlDotNet.Serialization;
 
 namespace ArisenEngine.Core.Assets;
 
@@ -24,6 +25,12 @@ public class AssetMetadata : ISerializationCallbackReceiver
     /// </summary>
     public string Importer { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Optional provenance for generated/imported child assets derived from another source asset.
+    /// </summary>
+    [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
+    public GeneratedAssetMetadata? Generated { get; set; }
+
     public void OnAfterDeserialize()
     {
     }
@@ -31,4 +38,17 @@ public class AssetMetadata : ISerializationCallbackReceiver
     public void OnBeforeSerialize()
     {
     }
+}
+
+public sealed class GeneratedAssetMetadata
+{
+    public Guid SourceGuid { get; set; }
+
+    public string SourcePackageId { get; set; } = string.Empty;
+
+    public string ChildKind { get; set; } = string.Empty;
+
+    public string ChildKey { get; set; } = string.Empty;
+
+    public string GeneratedByImporter { get; set; } = string.Empty;
 }

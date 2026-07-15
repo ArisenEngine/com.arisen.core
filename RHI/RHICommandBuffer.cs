@@ -123,6 +123,33 @@ public readonly struct RHICommandBuffer
         RHICommandBufferAPI.RHICommandBuffer_EndRendering(NativePtr);
     }
 
+    public void BeginRenderingDepthOnly(
+        RHIImageViewHandle depthImageView,
+        EImageLayout depthImageLayout,
+        EAttachmentLoadOp depthLoadOp,
+        EAttachmentStoreOp depthStoreOp,
+        float clearDepth,
+        uint clearStencil,
+        int x,
+        int y,
+        uint width,
+        uint height)
+    {
+        RHICommandBufferAPI.RHICommandBuffer_BeginRenderingDepthOnly(
+            NativePtr,
+            depthImageView.Index,
+            depthImageView.Generation,
+            (int)depthImageLayout,
+            (int)depthLoadOp,
+            (int)depthStoreOp,
+            clearDepth,
+            clearStencil,
+            x,
+            y,
+            width,
+            height);
+    }
+
     public void BindPipeline(RHIPipelineHandle pipeline)
     {
         RHICommandBufferAPI.RHICommandBuffer_BindPipeline(NativePtr, pipeline);

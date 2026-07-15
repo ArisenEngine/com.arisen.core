@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Arisen.Native.RHI;
+using ArisenKernel.Diagnostics;
 
 namespace ArisenEngine.Core.RHI;
 
@@ -18,7 +19,17 @@ public static class RHISystem
     public const uint DefaultVirtualSurfaceID = VirtualSurfaceIDMask | 0x0;
     private static bool m_PhysicalDevicePicked = false;
 
-    public static RHIInstance? Instance => m_Instance;
+    public static RHIInstance? Instance
+    {
+        get
+        {
+            lock (m_SyncRoot)
+            {
+                return m_Instance;
+            }
+        }
+    }
+
     public static string LastInitializationError => m_LastInitializationError;
     public static RHIDevice GetOrCreateDevice(uint windowId, uint width = 0, uint height = 0)
     {
@@ -37,6 +48,7 @@ public static class RHISystem
             // Re-check after acquiring lock
             if (m_MasterDevice.HasValue && m_MasterDevice.Value.IsValid)
             {
+                m_DeviceWrappers.TryAdd(windowId, m_MasterDevice.Value);
                 return m_MasterDevice.Value;
             }
 
@@ -75,55 +87,84 @@ public static class RHISystem
 
     public static bool Initialize(GraphicsAPI api, string appName = "ArisenApp", bool validationLayer = false)
     {
-        m_LastInitializationError = string.Empty;
-
-        try
+        lock (m_SyncRoot)
         {
-            // 1. Set the graphics API
-            RHILoaderAPI.RHILoader_SetCurrentGraphicsAPI((int)api);
+            m_LastInitializationError = string.Empty;
 
-            // 2. Create Instance
-            var instHandle = RHILoaderAPI.RHILoader_CreateInstance(
-                appName, "ArisenEngine", validationLayer ? 1 : 0,
-                0, 1, 3, 0, // Variant, Major, Minor, Patch (Vulkan 1.3)
-                1, 0, 0, // App version
-                1, 0, 0, // Engine version
-                2 // Max frames in flight
-            );
-
-            if (instHandle == IntPtr.Zero)
+            if (m_Instance.HasValue && m_Instance.Value.IsValid)
             {
-                m_LastInitializationError = RHILoader.GetLastErrorMessage();
-                if (string.IsNullOrWhiteSpace(m_LastInitializationError))
-                {
-                    m_LastInitializationError = "Native RHI instance creation returned null without a diagnostic message.";
-                }
-
-                return false;
+                return true;
             }
 
-            m_Instance = new RHIInstance(instHandle);
+            try
+            {
+                // 1. Set the graphics API
+                RHILoaderAPI.RHILoader_SetCurrentGraphicsAPI((int)api);
 
-            // 3. Defer Physical Device picking until Surface is created (handled by user/test framework).
-            return true;
-        }
-        catch (Exception e)
-        {
-            m_LastInitializationError = e.Message;
-            return false;
+                // 2. Create Instance
+                var instHandle = RHILoaderAPI.RHILoader_CreateInstance(
+                    appName, "ArisenEngine", validationLayer ? 1 : 0,
+                    0, 1, 3, 0, // Variant, Major, Minor, Patch (Vulkan 1.3)
+                    1, 0, 0, // App version
+                    1, 0, 0, // Engine version
+                    2 // Max frames in flight
+                );
+
+                if (instHandle == IntPtr.Zero)
+                {
+                    m_LastInitializationError = RHILoader.GetLastErrorMessage();
+                    if (string.IsNullOrWhiteSpace(m_LastInitializationError))
+                    {
+                        m_LastInitializationError = "Native RHI instance creation returned null without a diagnostic message.";
+                    }
+
+                    return false;
+                }
+
+                m_Instance = new RHIInstance(instHandle);
+
+                // 3. Defer Physical Device picking until Surface is created (handled by user/test framework).
+                return true;
+            }
+            catch (Exception e)
+            {
+                m_LastInitializationError = e.Message;
+                return false;
+            }
         }
     }
 
     public static void Shutdown()
     {
-        m_DeviceWrappers.Clear();
-
-        if (m_Instance != null)
+        lock (m_SyncRoot)
         {
-            m_Instance = null;
-        }
+            if (m_MasterDevice.HasValue && m_MasterDevice.Value.IsValid)
+            {
+                try
+                {
+                    m_MasterDevice.Value.WaitIdle();
+                }
+                catch (Exception e)
+                {
+                    KernelLog.WarningFormat("[RHISystem] DeviceWaitIdle failed during shutdown: {0}", e.Message);
+                }
+            }
 
-        RHILoaderAPI.RHILoader_Dispose();
-        m_LastInitializationError = string.Empty;
+            m_DeviceWrappers.Clear();
+            m_MasterDevice = null;
+            m_Instance = null;
+            m_PhysicalDevicePicked = false;
+
+            try
+            {
+                RHILoaderAPI.RHILoader_Dispose();
+            }
+            catch (Exception e)
+            {
+                KernelLog.WarningFormat("[RHISystem] RHILoader dispose failed during shutdown: {0}", e.Message);
+            }
+
+            m_LastInitializationError = string.Empty;
+        }
     }
 }

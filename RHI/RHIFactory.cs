@@ -142,13 +142,58 @@ public readonly struct RHIFactory
         return new RHIFrameBufferHandle { Index = index, Generation = gen };
     }
 
-    public unsafe RHISamplerHandle CreateSampler(EFilter magFilter, EFilter minFilter, ESamplerMipmapMode mipmapMode,
+    public RHISamplerHandle CreateSampler(EFilter magFilter, EFilter minFilter, ESamplerMipmapMode mipmapMode,
         ESamplerAddressMode addressMode)
     {
+        return CreateSampler(
+            magFilter,
+            minFilter,
+            mipmapMode,
+            addressMode,
+            addressMode,
+            addressMode);
+    }
+
+    public unsafe RHISamplerHandle CreateSampler(
+        EFilter magFilter,
+        EFilter minFilter,
+        ESamplerMipmapMode mipmapMode,
+        ESamplerAddressMode addressModeU,
+        ESamplerAddressMode addressModeV,
+        ESamplerAddressMode addressModeW)
+    {
+        return CreateSampler(
+            magFilter,
+            minFilter,
+            mipmapMode,
+            addressModeU,
+            addressModeV,
+            addressModeW,
+            0.0f,
+            1.0f);
+    }
+
+    public unsafe RHISamplerHandle CreateSampler(
+        EFilter magFilter,
+        EFilter minFilter,
+        ESamplerMipmapMode mipmapMode,
+        ESamplerAddressMode addressModeU,
+        ESamplerAddressMode addressModeV,
+        ESamplerAddressMode addressModeW,
+        float minLod,
+        float maxLod)
+    {
+        if (!float.IsFinite(minLod) || !float.IsFinite(maxLod) || minLod < 0.0f || maxLod < minLod)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxLod),
+                "Sampler LOD bounds must be finite, non-negative, and ordered.");
+        }
+
         uint index = 0;
         uint gen = 0;
         RHIFactoryAPI.RHIFactory_CreateSampler(Handle, (int)magFilter, (int)minFilter, (int)mipmapMode,
-            (int)addressMode, (int)addressMode, (int)addressMode, 0, 0, 1.0f, 0, 0, 0, 1.0f, 0, (IntPtr)(&index),
+            (int)addressModeU, (int)addressModeV, (int)addressModeW, 0, 0, 1.0f, 0, 0, minLod, maxLod, 0, (IntPtr)(&index),
             (IntPtr)(&gen));
         return new RHISamplerHandle { Index = index, Generation = gen };
     }

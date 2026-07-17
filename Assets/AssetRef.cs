@@ -30,6 +30,11 @@ public sealed class Texture2DSourceAsset
     private Texture2DSourceAsset() { }
 }
 
+public sealed class EnvironmentTextureSourceAsset
+{
+    private EnvironmentTextureSourceAsset() { }
+}
+
 public sealed class MeshSourceAsset
 {
     private MeshSourceAsset() { }

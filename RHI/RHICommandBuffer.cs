@@ -307,12 +307,32 @@ public readonly struct RHICommandBuffer
         uint width,
         uint height)
     {
-        RHICommandBufferExtAPI.RHICommandBuffer_CopyBufferToImage2D(
+        CopyBufferToImage2D(
+            src,
+            dst,
+            dstImageLayout,
+            bufferOffset,
+            0,
+            width,
+            height);
+    }
+
+    public void CopyBufferToImage2D(
+        RHIBufferHandle src,
+        RHIImageHandle dst,
+        EImageLayout dstImageLayout,
+        ulong bufferOffset,
+        uint mipLevel,
+        uint width,
+        uint height)
+    {
+        RHICommandBufferExtAPI.RHICommandBuffer_CopyBufferToImage2DSubresource(
             NativePtr,
             src,
             dst,
             (int)dstImageLayout,
             bufferOffset,
+            mipLevel,
             width,
             height);
     }

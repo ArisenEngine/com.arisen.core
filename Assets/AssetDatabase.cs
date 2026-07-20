@@ -80,13 +80,19 @@ public class AssetDatabase : IAssetDatabase
                 continue;
             }
 
+            if (string.IsNullOrWhiteSpace(packageId))
+            {
+                throw new InvalidOperationException(
+                    $"Asset indexing requires a package id for root '{packageRoot}'.");
+            }
+
             var assetsRoot = Path.Combine(packageRoot, "Assets");
             if (!Directory.Exists(assetsRoot))
             {
                 continue;
             }
 
-            RefreshDirectory(assetsRoot, string.IsNullOrWhiteSpace(packageId) ? Path.GetFileName(packageRoot) : packageId);
+            RefreshDirectory(assetsRoot, packageId.Trim());
         }
 
         Logger.Info($"[AssetDatabase] Indexed {m_AssetRegistry.Count} asset(s). CookedRoot: {CookedRoot}");
@@ -488,6 +494,7 @@ public class AssetDatabase : IAssetDatabase
             ".model" => "Model",
             ".arisenscene" => "Scene",
             ".scene" => "Scene",
+            ".arisrenderpipeline" => "RenderPipelineSettings",
             ".armesh" => "Mesh",
             ".obj" => "Mesh",
             ".gltf" => "Mesh",
@@ -512,6 +519,7 @@ public class AssetDatabase : IAssetDatabase
             ".arismaterial" or ".material" => "ArisenMaterialImporter",
             ".arismodel" or ".model" => "ArisenModelImporter",
             ".arisenscene" or ".scene" => "ArisenSceneImporter",
+            ".arisrenderpipeline" => "ArisenRenderPipelineSettingsImporter",
             ".armesh" => "ArisenTextMeshImporter",
             ".obj" => "ObjMeshImporter",
             ".gltf" or ".glb" => "GltfMeshImporter",

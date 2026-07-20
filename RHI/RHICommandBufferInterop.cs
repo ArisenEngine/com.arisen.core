@@ -27,6 +27,11 @@ namespace Arisen.Native.RHI
         public static extern void RHICommandBuffer_CopyBufferToImage2DSubresource(
             IntPtr cb, RHIBufferHandle src, RHIImageHandle dst, int dstImageLayout,
             ulong bufferOffset, uint mipLevel, uint width, uint height);
+
+        [SuppressUnmanagedCodeSecurity, DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void RHICommandBuffer_CopyImageToBuffer2D(
+            IntPtr cb, RHIImageHandle src, int srcImageLayout, uint srcImageAspect, RHIBufferHandle dst,
+            ulong bufferOffset, uint width, uint height);
     }
 
     /// <summary>

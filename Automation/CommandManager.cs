@@ -5,6 +5,7 @@ namespace ArisenEngine.Core.Automation;
 
 public class CommandManager : ICommandManager
 {
+    private readonly object m_Gate = new();
     private readonly Stack<ICommand> _undoStack = new();
     private readonly Stack<ICommand> _redoStack = new();
     private int _maxHistorySize = 100;
@@ -14,20 +15,43 @@ public class CommandManager : ICommandManager
     public event Action<ICommand>? CommandRedone;
     public event Action? StateChanged;
 
-    public bool CanUndo => _undoStack.Count > 0;
-    public bool CanRedo => _redoStack.Count > 0;
+    public bool CanUndo
+    {
+        get
+        {
+            lock (m_Gate) return _undoStack.Count > 0;
+        }
+    }
+
+    public bool CanRedo
+    {
+        get
+        {
+            lock (m_Gate) return _redoStack.Count > 0;
+        }
+    }
 
     public int MaxHistorySize
     {
-        get => _maxHistorySize;
-        set => _maxHistorySize = value;
+        get
+        {
+            lock (m_Gate) return _maxHistorySize;
+        }
+        set
+        {
+            lock (m_Gate) _maxHistorySize = value;
+        }
     }
 
     public void Execute(ICommand command)
     {
-        command.Execute();
-        _undoStack.Push(command);
-        _redoStack.Clear(); // Invalidate redo stack upon new execution
+        ArgumentNullException.ThrowIfNull(command);
+        lock (m_Gate)
+        {
+            command.Execute();
+            _undoStack.Push(command);
+            _redoStack.Clear();
+        }
         
         CommandExecuted?.Invoke(command);
         StateChanged?.Invoke();
@@ -35,34 +59,59 @@ public class CommandManager : ICommandManager
 
     public void Undo()
     {
-        if (CanUndo)
+        ICommand command;
+        lock (m_Gate)
         {
-            var command = _undoStack.Pop();
-            command.Undo();
-            _redoStack.Push(command);
-            
-            CommandUndone?.Invoke(command);
-            StateChanged?.Invoke();
+            if (_undoStack.Count == 0) return;
+
+            command = _undoStack.Pop();
+            try
+            {
+                command.Undo();
+                _redoStack.Push(command);
+            }
+            catch
+            {
+                _undoStack.Push(command);
+                throw;
+            }
         }
+
+        CommandUndone?.Invoke(command);
+        StateChanged?.Invoke();
     }
 
     public void Redo()
     {
-        if (CanRedo)
+        ICommand command;
+        lock (m_Gate)
         {
-            var command = _redoStack.Pop();
-            command.Execute();
-            _undoStack.Push(command);
-            
-            CommandRedone?.Invoke(command);
-            StateChanged?.Invoke();
+            if (_redoStack.Count == 0) return;
+
+            command = _redoStack.Pop();
+            try
+            {
+                command.Execute();
+                _undoStack.Push(command);
+            }
+            catch
+            {
+                _redoStack.Push(command);
+                throw;
+            }
         }
+
+        CommandRedone?.Invoke(command);
+        StateChanged?.Invoke();
     }
 
     public void Clear()
     {
-        _undoStack.Clear();
-        _redoStack.Clear();
+        lock (m_Gate)
+        {
+            _undoStack.Clear();
+            _redoStack.Clear();
+        }
         StateChanged?.Invoke();
     }
 }

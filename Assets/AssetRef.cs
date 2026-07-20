@@ -55,6 +55,11 @@ public sealed class SceneSourceAsset
     private SceneSourceAsset() { }
 }
 
+public sealed class RenderPipelineSettingsSourceAsset
+{
+    private RenderPipelineSettingsSourceAsset() { }
+}
+
 public static class AssetDatabaseExtensions
 {
     public static bool TryGetAsset<TAsset>(

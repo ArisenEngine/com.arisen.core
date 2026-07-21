@@ -12,7 +12,8 @@
   "services": {
     "provides": [
       "ArisenKernel.Contracts.ILogger",
-      "ArisenEngine.Core.Automation.ICommandManager"
+      "ArisenEngine.Core.Automation.ICommandManager",
+      "ArisenEngine.Core.Assets.IRuntimeAssetCookerRegistry"
     ]
   },
   "subsystems": [

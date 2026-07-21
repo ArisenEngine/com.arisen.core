@@ -22,7 +22,18 @@ public class AssetDatabase : IAssetDatabase
     private readonly Dictionary<string, int> m_LoadedCookedAssetSlotsByKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<LoadedCookedAssetSlot> m_LoadedCookedAssetSlots = new();
     private readonly Stack<int> m_FreeLoadedCookedAssetSlots = new();
+    private readonly object m_LoadedCookedAssetGate = new();
     private string m_CookedManifestPath = string.Empty;
+    private RuntimeAssetCatalog? m_RuntimeCatalog;
+
+    public AssetDatabaseMode Mode { get; private set; } = AssetDatabaseMode.Uninitialized;
+
+    public bool IsReadOnlyRuntime => Mode == AssetDatabaseMode.ReadOnlyRuntime;
+
+    public AssetSourceAccessMode SourceAccessMode { get; private set; } =
+        AssetSourceAccessMode.Disabled;
+
+    public bool CanReadSourceAssets => SourceAccessMode != AssetSourceAccessMode.Disabled;
 
     public string CookedRoot { get; private set; } = string.Empty;
 
@@ -33,10 +44,16 @@ public class AssetDatabase : IAssetDatabase
     /// <summary>
     /// Scans the given project directory to index all assets and automatically provisions missing .meta files.
     /// </summary>
-    public void Initialize(string projectContentPath)
+    public void Initialize(
+        string projectContentPath,
+        AssetSourceAccessMode sourceAccessMode)
     {
+        Mode = AssetDatabaseMode.Workspace;
+        SourceAccessMode = sourceAccessMode;
+        m_RuntimeCatalog = null;
         m_AssetRegistry.Clear();
         m_PathRegistry.Clear();
+        m_CookedRegistry.Clear();
         ReleaseAllLoadedCookedAssets();
 
         if (!Directory.Exists(projectContentPath))
@@ -50,8 +67,15 @@ public class AssetDatabase : IAssetDatabase
         RefreshDirectory(projectContentPath);
     }
 
-    public void InitializeWorkspace(string workspaceRoot, IEnumerable<(string PackageId, string PackageRoot)> packages)
+    public void InitializeWorkspace(
+        string workspaceRoot,
+        IEnumerable<(string PackageId, string PackageRoot)> packages,
+        AssetSourceAccessMode sourceAccessMode)
     {
+        ArgumentNullException.ThrowIfNull(packages);
+        Mode = AssetDatabaseMode.Workspace;
+        SourceAccessMode = sourceAccessMode;
+        m_RuntimeCatalog = null;
         m_AssetRegistry.Clear();
         m_PathRegistry.Clear();
         m_CookedRegistry.Clear();
@@ -98,16 +122,98 @@ public class AssetDatabase : IAssetDatabase
         Logger.Info($"[AssetDatabase] Indexed {m_AssetRegistry.Count} asset(s). CookedRoot: {CookedRoot}");
     }
 
+    public void InitializeRuntimeCatalog(string outputRoot, string expectedProfile)
+    {
+        if (string.IsNullOrWhiteSpace(outputRoot))
+        {
+            throw new ArgumentException(
+                "[AssetDatabase] Runtime output root cannot be empty.",
+                nameof(outputRoot));
+        }
+
+        if (string.IsNullOrWhiteSpace(expectedProfile))
+        {
+            throw new ArgumentException(
+                "[AssetDatabase] Expected runtime profile cannot be empty.",
+                nameof(expectedProfile));
+        }
+
+        string fullOutputRoot = Path.GetFullPath(outputRoot);
+        string catalogPath = Path.Combine(fullOutputRoot, RuntimeAssetCatalog.DefaultFileName);
+        if (!File.Exists(catalogPath))
+        {
+            throw new FileNotFoundException(
+                $"[AssetDatabase] Runtime asset catalog was not found at '{catalogPath}'.",
+                catalogPath);
+        }
+
+        RuntimeAssetCatalog catalog = RuntimeAssetCatalog.Parse(File.ReadAllBytes(catalogPath));
+        if (!string.Equals(
+                catalog.TargetProfile,
+                expectedProfile.Trim(),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"[AssetDatabase] Runtime asset catalog targets profile " +
+                $"'{catalog.TargetProfile}', expected '{expectedProfile.Trim()}'.");
+        }
+
+        string contentRoot = Path.Combine(
+            fullOutputRoot,
+            RuntimeAssetDeployment.ContentDirectoryName);
+        catalog.ValidateDeployment(contentRoot);
+
+        var mountedArtifacts = new Dictionary<string, CookedAssetRecord>(
+            catalog.Artifacts.Count,
+            StringComparer.OrdinalIgnoreCase);
+        foreach (RuntimeAssetCatalogArtifact artifact in catalog.Artifacts)
+        {
+            string path = catalog.ResolveArtifactPath(
+                contentRoot,
+                artifact.Guid,
+                artifact.Variant);
+            mountedArtifacts.Add(
+                MakeCookedKey(artifact.Guid, artifact.Variant),
+                new CookedAssetRecord(
+                    artifact.Guid,
+                    artifact.AssetType,
+                    artifact.Variant,
+                    path,
+                    artifact.SizeInBytes,
+                    File.GetLastWriteTimeUtc(path)));
+        }
+
+        ReleaseAllLoadedCookedAssets();
+        m_AssetRegistry.Clear();
+        m_PathRegistry.Clear();
+        m_CookedRegistry.Clear();
+        foreach ((string key, CookedAssetRecord artifact) in mountedArtifacts)
+        {
+            m_CookedRegistry.Add(key, artifact);
+        }
+
+        CookedRoot = Path.GetFullPath(contentRoot);
+        m_CookedManifestPath = string.Empty;
+        m_RuntimeCatalog = catalog;
+        Mode = AssetDatabaseMode.ReadOnlyRuntime;
+        SourceAccessMode = AssetSourceAccessMode.Disabled;
+        Logger.Info(
+            $"[AssetDatabase] Mounted read-only runtime catalog for profile " +
+            $"'{catalog.TargetProfile}' with {catalog.Artifacts.Count} artifact(s) from '{catalogPath}'.");
+    }
+
     /// <summary>
     /// Refreshes the indexing of a directory recursively, creating .meta files for any asset without one.
     /// </summary>
     public void RefreshDirectory(string directoryPath)
     {
+        EnsureMutable("refresh source assets");
         RefreshDirectory(directoryPath, "workspace");
     }
 
     public void RefreshDirectory(string directoryPath, string packageId)
     {
+        EnsureMutable("refresh source assets");
         foreach (var filePath in Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.AllDirectories))
         {
             if (IsIgnoredPath(filePath))
@@ -200,12 +306,40 @@ public class AssetDatabase : IAssetDatabase
     /// </summary>
     public string? GetAssetPath(Guid guid)
     {
-        return m_AssetRegistry.TryGetValue(guid, out var asset) ? asset.SourcePath : null;
+        return CanReadSourceAssets && m_AssetRegistry.TryGetValue(guid, out var asset)
+            ? asset.SourcePath
+            : null;
     }
 
     public bool TryGetAsset(Guid guid, out AssetRecord asset)
     {
-        return m_AssetRegistry.TryGetValue(guid, out asset!);
+        if (CanReadSourceAssets)
+        {
+            return m_AssetRegistry.TryGetValue(guid, out asset!);
+        }
+
+        asset = null!;
+        return false;
+    }
+
+    public bool TryGetAssetDescriptor(Guid guid, out AssetDescriptor asset)
+    {
+        if (m_AssetRegistry.TryGetValue(guid, out AssetRecord? sourceAsset))
+        {
+            asset = new AssetDescriptor(
+                sourceAsset.Guid,
+                sourceAsset.AssetType,
+                sourceAsset.PackageId);
+            return true;
+        }
+
+        if (m_RuntimeCatalog != null && m_RuntimeCatalog.TryGetAsset(guid, out asset))
+        {
+            return true;
+        }
+
+        asset = default;
+        return false;
     }
 
     public bool TryGetCookedArtifact(Guid guid, string variant, out CookedAssetRecord artifact)
@@ -215,6 +349,7 @@ public class AssetDatabase : IAssetDatabase
 
     public string GetCookedArtifactPath(Guid guid, string variant, string extension)
     {
+        EnsureMutable("create a cooked artifact path");
         if (string.IsNullOrWhiteSpace(CookedRoot))
         {
             throw new InvalidOperationException("[AssetDatabase] CookedRoot is not initialized.");
@@ -232,6 +367,7 @@ public class AssetDatabase : IAssetDatabase
 
     public void RegisterCookedArtifact(CookedAssetRecord artifact)
     {
+        EnsureMutable("register cooked artifacts");
         m_CookedRegistry[MakeCookedKey(artifact.Guid, artifact.Variant)] = artifact;
         SaveCookedManifest();
     }
@@ -240,9 +376,10 @@ public class AssetDatabase : IAssetDatabase
     {
         handle = CookedAssetHandle.Invalid;
 
-        if (!TryGetAsset(guid, out var asset))
+        if (!TryGetAssetDescriptor(guid, out AssetDescriptor asset))
         {
-            Logger.Warning($"[AssetDatabase] Cannot load cooked asset '{guid}': source asset is not indexed.");
+            Logger.Warning(
+                $"[AssetDatabase] Cannot load cooked asset '{guid}': asset identity is not indexed or cataloged.");
             return false;
         }
 
@@ -267,12 +404,15 @@ public class AssetDatabase : IAssetDatabase
         }
 
         var key = MakeCookedKey(guid, variant);
-        if (m_LoadedCookedAssetSlotsByKey.TryGetValue(key, out var existingIndex))
+        lock (m_LoadedCookedAssetGate)
         {
-            var existingSlot = m_LoadedCookedAssetSlots[existingIndex];
-            existingSlot.RefCount++;
-            handle = new CookedAssetHandle(existingIndex, existingSlot.Generation, existingSlot.Guid, existingSlot.Variant);
-            return true;
+            if (m_LoadedCookedAssetSlotsByKey.TryGetValue(key, out var existingIndex))
+            {
+                var existingSlot = m_LoadedCookedAssetSlots[existingIndex];
+                existingSlot.RefCount++;
+                handle = new CookedAssetHandle(existingIndex, existingSlot.Generation, existingSlot.Guid, existingSlot.Variant);
+                return true;
+            }
         }
 
         var bytes = File.ReadAllBytes(artifact.Path);
@@ -282,20 +422,35 @@ public class AssetDatabase : IAssetDatabase
             return false;
         }
 
-        var slotIndex = AllocateLoadedCookedAssetSlot();
-        var slot = m_LoadedCookedAssetSlots[slotIndex];
-        slot.IsOccupied = true;
-        slot.Key = key;
-        slot.Guid = guid;
-        slot.AssetType = asset.AssetType;
-        slot.Variant = variant;
-        slot.Path = Path.GetFullPath(artifact.Path);
-        slot.Data = bytes;
-        slot.RefCount = 1;
-        slot.LastWriteTimeUtc = File.GetLastWriteTimeUtc(artifact.Path);
-        m_LoadedCookedAssetSlotsByKey[key] = slotIndex;
+        lock (m_LoadedCookedAssetGate)
+        {
+            if (m_LoadedCookedAssetSlotsByKey.TryGetValue(key, out var racedIndex))
+            {
+                var racedSlot = m_LoadedCookedAssetSlots[racedIndex];
+                racedSlot.RefCount++;
+                handle = new CookedAssetHandle(
+                    racedIndex,
+                    racedSlot.Generation,
+                    racedSlot.Guid,
+                    racedSlot.Variant);
+                return true;
+            }
 
-        handle = new CookedAssetHandle(slotIndex, slot.Generation, slot.Guid, slot.Variant);
+            var slotIndex = AllocateLoadedCookedAssetSlot();
+            var slot = m_LoadedCookedAssetSlots[slotIndex];
+            slot.IsOccupied = true;
+            slot.Key = key;
+            slot.Guid = guid;
+            slot.AssetType = asset.AssetType;
+            slot.Variant = variant;
+            slot.Path = Path.GetFullPath(artifact.Path);
+            slot.Data = bytes;
+            slot.RefCount = 1;
+            slot.LastWriteTimeUtc = File.GetLastWriteTimeUtc(artifact.Path);
+            m_LoadedCookedAssetSlotsByKey[key] = slotIndex;
+            handle = new CookedAssetHandle(slotIndex, slot.Generation, slot.Guid, slot.Variant);
+        }
+
         Logger.Info(
             $"[AssetDatabase] Loaded cooked asset {guid} | Variant: {variant} | Size: {bytes.Length} bytes | Handle: {handle.Index}:{handle.Generation}");
         return true;
@@ -303,14 +458,17 @@ public class AssetDatabase : IAssetDatabase
 
     public bool TryGetCookedAssetBytes(CookedAssetHandle handle, out ReadOnlyMemory<byte> bytes)
     {
-        bytes = ReadOnlyMemory<byte>.Empty;
-        if (!TryGetLoadedCookedAssetSlot(handle, out var slot))
+        lock (m_LoadedCookedAssetGate)
         {
-            return false;
-        }
+            bytes = ReadOnlyMemory<byte>.Empty;
+            if (!TryGetLoadedCookedAssetSlot(handle, out var slot))
+            {
+                return false;
+            }
 
-        bytes = slot.Data;
-        return true;
+            bytes = slot.Data;
+            return true;
+        }
     }
 
     public ReadOnlyMemory<byte> GetCookedAssetBytes(CookedAssetHandle handle)
@@ -325,46 +483,53 @@ public class AssetDatabase : IAssetDatabase
 
     public void Release(CookedAssetHandle handle)
     {
-        if (!TryGetLoadedCookedAssetSlot(handle, out var slot))
+        lock (m_LoadedCookedAssetGate)
         {
-            Logger.Warning($"[AssetDatabase] Ignored release for invalid cooked asset handle {handle.Index}:{handle.Generation}.");
-            return;
+            if (!TryGetLoadedCookedAssetSlot(handle, out var slot))
+            {
+                Logger.Warning($"[AssetDatabase] Ignored release for invalid cooked asset handle {handle.Index}:{handle.Generation}.");
+                return;
+            }
+
+            slot.RefCount--;
+            if (slot.RefCount > 0)
+            {
+                return;
+            }
+
+            Logger.Info(
+                $"[AssetDatabase] Unloaded cooked asset {slot.Guid} | Variant: {slot.Variant} | Handle: {handle.Index}:{handle.Generation}");
+
+            m_LoadedCookedAssetSlotsByKey.Remove(slot.Key);
+            slot.Reset();
+            m_FreeLoadedCookedAssetSlots.Push(handle.Index);
         }
-
-        slot.RefCount--;
-        if (slot.RefCount > 0)
-        {
-            return;
-        }
-
-        Logger.Info(
-            $"[AssetDatabase] Unloaded cooked asset {slot.Guid} | Variant: {slot.Variant} | Handle: {handle.Index}:{handle.Generation}");
-
-        m_LoadedCookedAssetSlotsByKey.Remove(slot.Key);
-        slot.Reset();
-        m_FreeLoadedCookedAssetSlots.Push(handle.Index);
     }
 
     public void ReleaseAllLoadedCookedAssets()
     {
-        for (int i = 0; i < m_LoadedCookedAssetSlots.Count; i++)
+        lock (m_LoadedCookedAssetGate)
         {
-            if (m_LoadedCookedAssetSlots[i].IsOccupied)
+            for (int i = 0; i < m_LoadedCookedAssetSlots.Count; i++)
             {
-                m_LoadedCookedAssetSlots[i].Reset();
+                if (m_LoadedCookedAssetSlots[i].IsOccupied)
+                {
+                    m_LoadedCookedAssetSlots[i].Reset();
+                }
             }
-        }
 
-        m_LoadedCookedAssetSlotsByKey.Clear();
-        m_FreeLoadedCookedAssetSlots.Clear();
-        for (int i = m_LoadedCookedAssetSlots.Count - 1; i >= 0; i--)
-        {
-            m_FreeLoadedCookedAssetSlots.Push(i);
+            m_LoadedCookedAssetSlotsByKey.Clear();
+            m_FreeLoadedCookedAssetSlots.Clear();
+            for (int i = m_LoadedCookedAssetSlots.Count - 1; i >= 0; i--)
+            {
+                m_FreeLoadedCookedAssetSlots.Push(i);
+            }
         }
     }
 
     public int InvalidateCookedAssets(Guid guid, string? variant = null)
     {
+        EnsureMutable("invalidate cooked artifacts");
         if (guid == Guid.Empty)
         {
             return 0;
@@ -416,24 +581,27 @@ public class AssetDatabase : IAssetDatabase
 
     public IReadOnlyList<LoadedCookedAssetDiagnostic> GetLoadedCookedAssetDiagnostics()
     {
-        var diagnostics = new List<LoadedCookedAssetDiagnostic>(m_LoadedCookedAssetSlotsByKey.Count);
-        foreach (var slot in m_LoadedCookedAssetSlots)
+        lock (m_LoadedCookedAssetGate)
         {
-            if (!slot.IsOccupied)
+            var diagnostics = new List<LoadedCookedAssetDiagnostic>(m_LoadedCookedAssetSlotsByKey.Count);
+            foreach (var slot in m_LoadedCookedAssetSlots)
             {
-                continue;
+                if (!slot.IsOccupied)
+                {
+                    continue;
+                }
+
+                diagnostics.Add(new LoadedCookedAssetDiagnostic(
+                    slot.Guid,
+                    slot.AssetType,
+                    slot.Variant,
+                    slot.Path,
+                    slot.RefCount,
+                    slot.Data.LongLength));
             }
 
-            diagnostics.Add(new LoadedCookedAssetDiagnostic(
-                slot.Guid,
-                slot.AssetType,
-                slot.Variant,
-                slot.Path,
-                slot.RefCount,
-                slot.Data.LongLength));
+            return diagnostics;
         }
-
-        return diagnostics;
     }
 
     /// <summary>
@@ -494,6 +662,7 @@ public class AssetDatabase : IAssetDatabase
             ".model" => "Model",
             ".arisenscene" => "Scene",
             ".scene" => "Scene",
+            ".arisenworld" => "World",
             ".arisrenderpipeline" => "RenderPipelineSettings",
             ".armesh" => "Mesh",
             ".obj" => "Mesh",
@@ -519,6 +688,7 @@ public class AssetDatabase : IAssetDatabase
             ".arismaterial" or ".material" => "ArisenMaterialImporter",
             ".arismodel" or ".model" => "ArisenModelImporter",
             ".arisenscene" or ".scene" => "ArisenSceneImporter",
+            ".arisenworld" => "ArisenWorldImporter",
             ".arisrenderpipeline" => "ArisenRenderPipelineSettingsImporter",
             ".armesh" => "ArisenTextMeshImporter",
             ".obj" => "ObjMeshImporter",
@@ -567,6 +737,16 @@ public class AssetDatabase : IAssetDatabase
         return new string(chars);
     }
 
+    private void EnsureMutable(string operation)
+    {
+        if (IsReadOnlyRuntime)
+        {
+            throw new InvalidOperationException(
+                $"[AssetDatabase] Cannot {operation} while a read-only runtime catalog is mounted. " +
+                "Production content must be cooked and deployed before launch.");
+        }
+    }
+
     private int AllocateLoadedCookedAssetSlot()
     {
         if (m_FreeLoadedCookedAssetSlots.Count > 0)
@@ -604,29 +784,32 @@ public class AssetDatabase : IAssetDatabase
 
     private int ReleaseLoadedCookedAssets(Guid guid, string? variant)
     {
-        int releasedCount = 0;
-
-        for (int i = 0; i < m_LoadedCookedAssetSlots.Count; i++)
+        lock (m_LoadedCookedAssetGate)
         {
-            var slot = m_LoadedCookedAssetSlots[i];
-            if (!slot.IsOccupied || slot.Guid != guid)
+            int releasedCount = 0;
+
+            for (int i = 0; i < m_LoadedCookedAssetSlots.Count; i++)
             {
-                continue;
+                var slot = m_LoadedCookedAssetSlots[i];
+                if (!slot.IsOccupied || slot.Guid != guid)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(variant)
+                    && !string.Equals(slot.Variant, variant, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                m_LoadedCookedAssetSlotsByKey.Remove(slot.Key);
+                slot.Reset();
+                m_FreeLoadedCookedAssetSlots.Push(i);
+                releasedCount++;
             }
 
-            if (!string.IsNullOrWhiteSpace(variant)
-                && !string.Equals(slot.Variant, variant, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            m_LoadedCookedAssetSlotsByKey.Remove(slot.Key);
-            slot.Reset();
-            m_FreeLoadedCookedAssetSlots.Push(i);
-            releasedCount++;
+            return releasedCount;
         }
-
-        return releasedCount;
     }
 
     private void LoadCookedManifest()

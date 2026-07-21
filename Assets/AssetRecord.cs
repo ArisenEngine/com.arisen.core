@@ -7,6 +7,26 @@ public sealed record AssetRecord(
     string MetaPath,
     string PackageId);
 
+public readonly record struct AssetDescriptor(
+    Guid Guid,
+    string AssetType,
+    string PackageId);
+
+public enum AssetDatabaseMode
+{
+    Uninitialized,
+    Workspace,
+    ReadOnlyRuntime
+}
+
+public enum AssetSourceAccessMode
+{
+    Disabled,
+    EditorAuthoring,
+    Diagnostic,
+    RuntimeAssetCook
+}
+
 public sealed record CookedAssetRecord(
     Guid Guid,
     string AssetType,
@@ -53,6 +73,14 @@ public readonly record struct AssetChangeEvent(
 
 public interface IAssetDatabase
 {
+    AssetDatabaseMode Mode { get; }
+
+    bool IsReadOnlyRuntime { get; }
+
+    AssetSourceAccessMode SourceAccessMode { get; }
+
+    bool CanReadSourceAssets { get; }
+
     string CookedRoot { get; }
 
     IReadOnlyCollection<AssetRecord> Assets { get; }
@@ -60,6 +88,8 @@ public interface IAssetDatabase
     event Action<AssetChangeEvent>? AssetChanged;
 
     bool TryGetAsset(Guid guid, out AssetRecord asset);
+
+    bool TryGetAssetDescriptor(Guid guid, out AssetDescriptor asset);
 
     bool TryGetCookedArtifact(Guid guid, string variant, out CookedAssetRecord artifact);
 

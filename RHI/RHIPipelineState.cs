@@ -51,6 +51,24 @@ public readonly struct RHIPipelineState
             (int)frontFace);
     }
 
+    public void SetRasterizationStateWithDepthBias(
+        EPolygonMode polygonMode,
+        ECullModeFlagBits cullMode,
+        EFrontFace frontFace,
+        float depthBiasConstantFactor,
+        float depthBiasClamp,
+        float depthBiasSlopeFactor)
+    {
+        RHIPipelineAPI.RHIPipelineState_SetRasterizationStateWithDepthBias(
+            NativePtr,
+            (int)polygonMode,
+            (int)cullMode,
+            (int)frontFace,
+            depthBiasConstantFactor,
+            depthBiasClamp,
+            depthBiasSlopeFactor);
+    }
+
     public unsafe void SetRenderingFormats(EFormat[] colorFormats, EFormat depthFormat)
     {
         fixed (EFormat* pFormats = colorFormats)

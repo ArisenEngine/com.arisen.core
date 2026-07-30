@@ -11,13 +11,14 @@ namespace ArisenEngine.Core.Assets;
 /// A centralized registry that indexes discovered assets in the project directory,
 /// matching files to their serialized .meta files and GUIDs.
 /// </summary>
-public class AssetDatabase : IAssetDatabase
+public class AssetDatabase : IAssetDatabase, IAssetSourceIndex
 {
     private static AssetDatabase? s_Instance;
     public static AssetDatabase Instance => s_Instance ??= new AssetDatabase();
 
     private readonly Dictionary<Guid, AssetRecord> m_AssetRegistry = new();
     private readonly Dictionary<string, Guid> m_PathRegistry = new();
+    private readonly object m_SourceRegistryGate = new();
     private readonly Dictionary<string, CookedAssetRecord> m_CookedRegistry = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> m_LoadedCookedAssetSlotsByKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<LoadedCookedAssetSlot> m_LoadedCookedAssetSlots = new();
@@ -37,7 +38,13 @@ public class AssetDatabase : IAssetDatabase
 
     public string CookedRoot { get; private set; } = string.Empty;
 
-    public IReadOnlyCollection<AssetRecord> Assets => m_AssetRegistry.Values;
+    public IReadOnlyCollection<AssetRecord> Assets
+    {
+        get
+        {
+            lock (m_SourceRegistryGate) return m_AssetRegistry.Values.ToArray();
+        }
+    }
 
     public event Action<AssetChangeEvent>? AssetChanged;
 
@@ -214,6 +221,14 @@ public class AssetDatabase : IAssetDatabase
     public void RefreshDirectory(string directoryPath, string packageId)
     {
         EnsureMutable("refresh source assets");
+        lock (m_SourceRegistryGate)
+        {
+            RefreshDirectoryCore(directoryPath, packageId);
+        }
+    }
+
+    private void RefreshDirectoryCore(string directoryPath, string packageId)
+    {
         foreach (var filePath in Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.AllDirectories))
         {
             if (IsIgnoredPath(filePath))
@@ -301,21 +316,78 @@ public class AssetDatabase : IAssetDatabase
         }
     }
 
+    public void RefreshSourceDirectory(string directoryPath, string packageId)
+    {
+        EnsureMutable("refresh the source asset index");
+        if (!CanReadSourceAssets)
+        {
+            throw new InvalidOperationException(
+                "[AssetDatabase] Source indexing is unavailable when source access is disabled.");
+        }
+
+        if (string.IsNullOrWhiteSpace(directoryPath) ||
+            string.IsNullOrWhiteSpace(packageId) ||
+            !string.Equals(packageId, packageId.Trim(), StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "[AssetDatabase] Source refresh requires a directory and canonical package id.");
+        }
+
+        string directory = Path.GetFullPath(directoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!IsUnderAssetsRoot(directory) || ContainsPathSegment(directory, ".arisen"))
+        {
+            throw new InvalidOperationException(
+                $"[AssetDatabase] Source refresh must stay under an Assets root: '{directory}'.");
+        }
+
+        lock (m_SourceRegistryGate)
+        {
+            AssetRecord[] replaced = GetSourceAssetsUnder(directory, packageId);
+            RemoveSourceAssets(replaced);
+
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    RefreshDirectoryCore(directory, packageId);
+                }
+            }
+            catch
+            {
+                RemoveSourceAssets(GetSourceAssetsUnder(directory, packageId));
+                foreach (AssetRecord asset in replaced)
+                {
+                    m_AssetRegistry[asset.Guid] = asset;
+                    m_PathRegistry[Path.GetFullPath(asset.SourcePath)] = asset.Guid;
+                }
+
+                throw;
+            }
+        }
+    }
+
     /// <summary>
     /// Looks up the absolute file path for a registered asset reference.
     /// </summary>
     public string? GetAssetPath(Guid guid)
     {
-        return CanReadSourceAssets && m_AssetRegistry.TryGetValue(guid, out var asset)
-            ? asset.SourcePath
-            : null;
+        lock (m_SourceRegistryGate)
+        {
+            return CanReadSourceAssets && m_AssetRegistry.TryGetValue(guid, out var asset)
+                ? asset.SourcePath
+                : null;
+        }
     }
 
     public bool TryGetAsset(Guid guid, out AssetRecord asset)
     {
         if (CanReadSourceAssets)
         {
-            return m_AssetRegistry.TryGetValue(guid, out asset!);
+            lock (m_SourceRegistryGate)
+            {
+                return m_AssetRegistry.TryGetValue(guid, out asset!);
+            }
         }
 
         asset = null!;
@@ -324,13 +396,16 @@ public class AssetDatabase : IAssetDatabase
 
     public bool TryGetAssetDescriptor(Guid guid, out AssetDescriptor asset)
     {
-        if (m_AssetRegistry.TryGetValue(guid, out AssetRecord? sourceAsset))
+        lock (m_SourceRegistryGate)
         {
-            asset = new AssetDescriptor(
-                sourceAsset.Guid,
-                sourceAsset.AssetType,
-                sourceAsset.PackageId);
-            return true;
+            if (m_AssetRegistry.TryGetValue(guid, out AssetRecord? sourceAsset))
+            {
+                asset = new AssetDescriptor(
+                    sourceAsset.Guid,
+                    sourceAsset.AssetType,
+                    sourceAsset.PackageId);
+                return true;
+            }
         }
 
         if (m_RuntimeCatalog != null && m_RuntimeCatalog.TryGetAsset(guid, out asset))
@@ -368,7 +443,9 @@ public class AssetDatabase : IAssetDatabase
     public void RegisterCookedArtifact(CookedAssetRecord artifact)
     {
         EnsureMutable("register cooked artifacts");
-        m_CookedRegistry[MakeCookedKey(artifact.Guid, artifact.Variant)] = artifact;
+        string key = MakeCookedKey(artifact.Guid, artifact.Variant);
+        m_CookedRegistry[key] = artifact;
+        SupersedeLoadedCookedAsset(key, artifact);
         SaveCookedManifest();
     }
 
@@ -500,7 +577,13 @@ public class AssetDatabase : IAssetDatabase
             Logger.Info(
                 $"[AssetDatabase] Unloaded cooked asset {slot.Guid} | Variant: {slot.Variant} | Handle: {handle.Index}:{handle.Generation}");
 
-            m_LoadedCookedAssetSlotsByKey.Remove(slot.Key);
+            if (m_LoadedCookedAssetSlotsByKey.TryGetValue(
+                    slot.Key,
+                    out int currentIndex) &&
+                currentIndex == handle.Index)
+            {
+                m_LoadedCookedAssetSlotsByKey.Remove(slot.Key);
+            }
             slot.Reset();
             m_FreeLoadedCookedAssetSlots.Push(handle.Index);
         }
@@ -553,7 +636,7 @@ public class AssetDatabase : IAssetDatabase
 
         if (releasedCount > 0 || registryKeys.Length > 0)
         {
-            m_AssetRegistry.TryGetValue(guid, out var asset);
+            AssetRecord? asset = GetSourceAsset(guid);
             NotifyAssetChanged(new AssetChangeEvent(
                 AssetChangeKind.CookedInvalidated,
                 guid,
@@ -567,6 +650,138 @@ public class AssetDatabase : IAssetDatabase
         }
 
         return releasedCount;
+    }
+
+    public int RemoveCookedArtifacts(IReadOnlyCollection<CookedAssetIdentity> identities)
+    {
+        EnsureMutable("remove cooked artifacts");
+        ArgumentNullException.ThrowIfNull(identities);
+        if (identities.Count == 0)
+        {
+            return 0;
+        }
+
+        if (string.IsNullOrWhiteSpace(CookedRoot))
+        {
+            throw new InvalidOperationException("[AssetDatabase] CookedRoot is not initialized.");
+        }
+
+        string cookedRoot = Path.GetFullPath(CookedRoot);
+        var observedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var observedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var removals = new List<CookedArtifactRemoval>(identities.Count);
+        foreach (CookedAssetIdentity identity in identities
+                     .OrderBy(identity => identity.Guid)
+                     .ThenBy(identity => identity.Variant, StringComparer.Ordinal))
+        {
+            ValidateCookedIdentity(identity);
+            string registryKey = MakeCookedKey(identity.Guid, identity.Variant);
+            if (!observedKeys.Add(registryKey) ||
+                !m_CookedRegistry.TryGetValue(registryKey, out CookedAssetRecord? artifact))
+            {
+                continue;
+            }
+
+            string artifactPath = ValidateCookedCachePath(cookedRoot, artifact);
+            if (!observedPaths.Add(artifactPath))
+            {
+                throw new InvalidOperationException(
+                    $"[AssetDatabase] Cooked artifacts selected for removal share path " +
+                    $"'{artifactPath}'.");
+            }
+
+            removals.Add(new CookedArtifactRemoval(
+                registryKey,
+                artifact,
+                artifactPath,
+                Path.GetRelativePath(cookedRoot, artifactPath)));
+        }
+
+        if (removals.Count == 0)
+        {
+            return 0;
+        }
+
+        string transactionRoot = Path.Combine(
+            cookedRoot,
+            ".remove",
+            Guid.NewGuid().ToString("N"));
+        var moved = new List<CookedArtifactRemoval>(removals.Count);
+        try
+        {
+            foreach (CookedArtifactRemoval removal in removals)
+            {
+                if (!File.Exists(removal.OriginalPath))
+                {
+                    continue;
+                }
+
+                string quarantinePath = Path.Combine(transactionRoot, removal.RelativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(quarantinePath)!);
+                File.Move(removal.OriginalPath, quarantinePath);
+                moved.Add(removal);
+            }
+
+            foreach (CookedArtifactRemoval removal in removals)
+            {
+                m_CookedRegistry.Remove(removal.RegistryKey);
+            }
+
+            WriteCookedManifest();
+        }
+        catch (Exception commitError)
+        {
+            foreach (CookedArtifactRemoval removal in removals)
+            {
+                m_CookedRegistry[removal.RegistryKey] = removal.Artifact;
+            }
+
+            try
+            {
+                for (int index = moved.Count - 1; index >= 0; index--)
+                {
+                    CookedArtifactRemoval removal = moved[index];
+                    string quarantinePath = Path.Combine(transactionRoot, removal.RelativePath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(removal.OriginalPath)!);
+                    File.Move(quarantinePath, removal.OriginalPath);
+                }
+            }
+            catch (Exception rollbackError)
+            {
+                throw new InvalidOperationException(
+                    "[AssetDatabase] Cooked artifact removal failed and its file rollback also failed.",
+                    new AggregateException(commitError, rollbackError));
+            }
+
+            TryDeleteDirectory(transactionRoot);
+            throw new InvalidOperationException(
+                "[AssetDatabase] Cooked artifact removal transaction failed.",
+                commitError);
+        }
+
+        int releasedCount = 0;
+        foreach (CookedArtifactRemoval removal in removals)
+        {
+            releasedCount += ReleaseLoadedCookedAssets(
+                removal.Artifact.Guid,
+                removal.Artifact.Variant);
+            AssetRecord? asset = GetSourceAsset(removal.Artifact.Guid);
+            NotifyAssetChanged(new AssetChangeEvent(
+                AssetChangeKind.CookedInvalidated,
+                removal.Artifact.Guid,
+                removal.Artifact.AssetType,
+                asset?.SourcePath ?? string.Empty,
+                string.Empty,
+                asset?.PackageId ?? string.Empty));
+            TryDeleteEmptyDirectory(Path.GetDirectoryName(removal.OriginalPath), cookedRoot);
+        }
+
+        TryDeleteDirectory(transactionRoot);
+        TryDeleteEmptyDirectory(Path.GetDirectoryName(transactionRoot), cookedRoot);
+        Logger.Info(
+            $"[AssetDatabase] Removed {removals.Count} cooked artifact(s) transactionally | " +
+            $"LoadedReleased: {releasedCount}");
+        return removals.Count;
     }
 
     public void NotifyAssetChanged(AssetChangeEvent change)
@@ -643,6 +858,73 @@ public class AssetDatabase : IAssetDatabase
         return false;
     }
 
+    private static bool IsUnderAssetsRoot(string path)
+    {
+        DirectoryInfo? directory = new DirectoryInfo(path);
+        while (directory != null)
+        {
+            if (string.Equals(directory.Name, "Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return false;
+    }
+
+    private AssetRecord[] GetSourceAssetsUnder(string directory, string packageId)
+    {
+        return m_AssetRegistry.Values
+            .Where(asset =>
+                string.Equals(asset.PackageId, packageId, StringComparison.OrdinalIgnoreCase) &&
+                IsSameOrChildPath(asset.SourcePath, directory))
+            .ToArray();
+    }
+
+    private AssetRecord? GetSourceAsset(Guid guid)
+    {
+        lock (m_SourceRegistryGate)
+        {
+            m_AssetRegistry.TryGetValue(guid, out AssetRecord? asset);
+            return asset;
+        }
+    }
+
+    private void RemoveSourceAssets(IEnumerable<AssetRecord> assets)
+    {
+        foreach (AssetRecord asset in assets)
+        {
+            m_AssetRegistry.Remove(asset.Guid);
+            m_PathRegistry.Remove(Path.GetFullPath(asset.SourcePath));
+        }
+    }
+
+    private static bool ContainsPathSegment(string path, string segment)
+    {
+        return Path.GetFullPath(path)
+            .Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries)
+            .Any(part => string.Equals(part, segment, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsSameOrChildPath(string path, string parent)
+    {
+        string normalizedPath = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string normalizedParent = Path.GetFullPath(parent)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return normalizedPath.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.StartsWith(
+                normalizedParent + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.StartsWith(
+                normalizedParent + Path.AltDirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string InferAssetType(string filePath)
     {
         var extension = Path.GetExtension(filePath).ToLowerInvariant();
@@ -705,6 +987,46 @@ public class AssetDatabase : IAssetDatabase
         return $"{guid:N}:{variant}";
     }
 
+    private static void ValidateCookedIdentity(CookedAssetIdentity identity)
+    {
+        if (identity.Guid == Guid.Empty ||
+            string.IsNullOrWhiteSpace(identity.Variant) ||
+            !string.Equals(identity.Variant, identity.Variant.Trim(), StringComparison.Ordinal) ||
+            identity.Variant.Any(char.IsControl))
+        {
+            throw new ArgumentException(
+                "[AssetDatabase] Cooked artifact removal requires a non-empty GUID and canonical variant.",
+                nameof(identity));
+        }
+    }
+
+    private static string ValidateCookedCachePath(
+        string cookedRoot,
+        CookedAssetRecord artifact)
+    {
+        if (string.IsNullOrWhiteSpace(artifact.Path) ||
+            !Path.IsPathFullyQualified(artifact.Path))
+        {
+            throw new InvalidOperationException(
+                $"[AssetDatabase] Cooked artifact '{artifact.Guid:D}:{artifact.Variant}' has a " +
+                "non-absolute cache path.");
+        }
+
+        string artifactPath = Path.GetFullPath(artifact.Path);
+        string relativePath = Path.GetRelativePath(cookedRoot, artifactPath);
+        if (relativePath.Equals("..", StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal) ||
+            Path.IsPathFullyQualified(relativePath))
+        {
+            throw new InvalidOperationException(
+                $"[AssetDatabase] Refusing to remove cooked artifact " +
+                $"'{artifact.Guid:D}:{artifact.Variant}' outside CookedRoot '{cookedRoot}'.");
+        }
+
+        return artifactPath;
+    }
+
     private static bool IsCookedKeyMatch(string key, Guid guid, string? variant)
     {
         string prefix = $"{guid:N}:";
@@ -757,6 +1079,31 @@ public class AssetDatabase : IAssetDatabase
         var slot = new LoadedCookedAssetSlot { Generation = 1 };
         m_LoadedCookedAssetSlots.Add(slot);
         return m_LoadedCookedAssetSlots.Count - 1;
+    }
+
+    private void SupersedeLoadedCookedAsset(string key, CookedAssetRecord artifact)
+    {
+        lock (m_LoadedCookedAssetGate)
+        {
+            if (!m_LoadedCookedAssetSlotsByKey.TryGetValue(key, out int loadedIndex))
+            {
+                return;
+            }
+
+            LoadedCookedAssetSlot loaded = m_LoadedCookedAssetSlots[loadedIndex];
+            string artifactPath = Path.GetFullPath(artifact.Path);
+            if (string.Equals(loaded.Path, artifactPath, StringComparison.OrdinalIgnoreCase) &&
+                loaded.Data.LongLength == artifact.SizeInBytes &&
+                loaded.LastWriteTimeUtc == artifact.LastWriteTimeUtc)
+            {
+                return;
+            }
+
+            m_LoadedCookedAssetSlotsByKey.Remove(key);
+            Logger.Info(
+                $"[AssetDatabase] Superseded loaded cooked asset {loaded.Guid} | " +
+                $"Variant: {loaded.Variant} | RetainedHandle: {loadedIndex}:{loaded.Generation}");
+        }
     }
 
     private bool TryGetLoadedCookedAssetSlot(CookedAssetHandle handle, out LoadedCookedAssetSlot slot)
@@ -848,25 +1195,9 @@ public class AssetDatabase : IAssetDatabase
 
     private void SaveCookedManifest()
     {
-        if (string.IsNullOrWhiteSpace(m_CookedManifestPath))
-        {
-            return;
-        }
-
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(m_CookedManifestPath)!);
-            var manifest = new CookedAssetManifest
-            {
-                Artifacts = m_CookedRegistry.Values
-                    .OrderBy(x => x.Guid)
-                    .ThenBy(x => x.Variant, StringComparer.OrdinalIgnoreCase)
-                    .ToList()
-            };
-
-            File.WriteAllText(
-                m_CookedManifestPath,
-                JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+            WriteCookedManifest();
         }
         catch (Exception ex)
         {
@@ -874,10 +1205,102 @@ public class AssetDatabase : IAssetDatabase
         }
     }
 
+    private void WriteCookedManifest()
+    {
+        if (string.IsNullOrWhiteSpace(m_CookedManifestPath))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(m_CookedManifestPath)!);
+        var manifest = new CookedAssetManifest
+        {
+            Artifacts = m_CookedRegistry.Values
+                .OrderBy(x => x.Guid)
+                .ThenBy(x => x.Variant, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        };
+        string temporaryPath = m_CookedManifestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(
+                temporaryPath,
+                JsonSerializer.Serialize(
+                    manifest,
+                    new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temporaryPath, m_CookedManifestPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"[AssetDatabase] Failed to delete cache transaction directory '{path}': {ex.Message}");
+        }
+    }
+
+    private static void TryDeleteEmptyDirectory(string? path, string cookedRoot)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            return;
+        }
+
+        string fullPath = Path.GetFullPath(path);
+        if (string.Equals(fullPath, cookedRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string relativePath = Path.GetRelativePath(cookedRoot, fullPath);
+        if (relativePath.Equals("..", StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal) ||
+            Path.IsPathFullyQualified(relativePath))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!Directory.EnumerateFileSystemEntries(fullPath).Any())
+            {
+                Directory.Delete(fullPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"[AssetDatabase] Failed to prune empty cache directory '{fullPath}': {ex.Message}");
+        }
+    }
+
     private sealed class CookedAssetManifest
     {
         public List<CookedAssetRecord> Artifacts { get; set; } = new();
     }
+
+    private sealed record CookedArtifactRemoval(
+        string RegistryKey,
+        CookedAssetRecord Artifact,
+        string OriginalPath,
+        string RelativePath);
 
     private sealed class LoadedCookedAssetSlot
     {

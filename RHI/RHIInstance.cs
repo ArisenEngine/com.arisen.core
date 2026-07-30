@@ -64,6 +64,24 @@ public readonly struct RHIInstance
         RHIInstanceAPI.RHIInstance_CreateSurface(Handle, windowId, width, height);
     }
 
+    public RHISurface GetSurface(uint surfaceId)
+    {
+        if (!IsValid)
+            throw new InvalidOperationException("Cannot resolve an RHI surface from an invalid instance.");
+
+        var surfaceHandle = RHIInstanceAPI.RHIInstance_GetSurface(Handle, surfaceId);
+        if (surfaceHandle == IntPtr.Zero)
+            throw new InvalidOperationException($"RHI surface 0x{surfaceId:X} is not available.");
+
+        return new RHISurface(surfaceHandle);
+    }
+
+    public void DestroySurface(uint surfaceId)
+    {
+        if (IsValid)
+            RHIInstanceAPI.RHIInstance_DestroySurface(Handle, surfaceId);
+    }
+
     public bool IsLinearColorSpaceSupported(uint surfaceId)
     {
         return IsValid && RHIInstanceAPI.RHIInstance_IsSupportLinearColorSpace(Handle, surfaceId) != 0;

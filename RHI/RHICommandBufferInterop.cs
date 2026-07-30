@@ -92,6 +92,6 @@ namespace ArisenEngine.Core.RHI
         /// External API ownership (e.g. D3D11 accessing a shared Win32 NT handle).
         /// Mirrors VK_QUEUE_FAMILY_EXTERNAL_KHR.
         /// </summary>
-        public const uint External = 0xFFFFFFFDu;
+        public const uint External = 0xFFFFFFFEu;
     }
 }

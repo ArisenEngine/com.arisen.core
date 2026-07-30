@@ -51,10 +51,21 @@ public readonly struct RHISwapChain
         return RHISwapChainAPI.RHISwapChain_CreateConsumedSemaphoreWin32Handle(Handle, frameIndex);
     }
 
+    public void CompleteConsumedSemaphoreWin32Handle(IntPtr handle)
+    {
+        if (!IsValid || handle == IntPtr.Zero) return;
+        RHISwapChainAPI.RHISwapChain_CompleteConsumedSemaphoreWin32Handle(Handle, handle);
+    }
+
     public void ReleaseConsumedSemaphoreWin32Handle(IntPtr handle)
     {
         if (!IsValid || handle == IntPtr.Zero) return;
         RHISwapChainAPI.RHISwapChain_ReleaseConsumedSemaphoreWin32Handle(Handle, handle);
+    }
+
+    public bool AcknowledgeExternalConsumerRelease()
+    {
+        return IsValid && RHISwapChainAPI.RHISwapChain_AcknowledgeExternalConsumerRelease(Handle);
     }
 
     public RHIImageViewHandle GetImageView(uint frameIndex)

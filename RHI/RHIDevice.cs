@@ -39,6 +39,21 @@ public readonly struct RHIDevice
         return new RHIInstance(instHandle);
     }
 
+    public unsafe RHICapabilities GetCapabilities()
+    {
+        if (!IsValid)
+        {
+            throw new InvalidOperationException(
+                "Cannot query capabilities from an invalid RHI device.");
+        }
+
+        RHICapabilities capabilities = default;
+        RHIDeviceAPI.RHIDevice_GetCapabilities(
+            Handle,
+            (IntPtr)(&capabilities));
+        return capabilities;
+    }
+
     public void WaitIdle()
     {
         RHIDeviceAPI.RHIDevice_DeviceWaitIdle(Handle);
@@ -56,7 +71,11 @@ public readonly struct RHIDevice
         return new RHIQueue(queuePtr);
     }
 
-    public unsafe ulong Submit(RHICommandBuffer cb, RHISwapChain? waitSC = null, RHISwapChain? signalSC = null)
+    public unsafe ulong Submit(
+        RHICommandBuffer cb,
+        RHISwapChain? waitSC = null,
+        RHISwapChain? signalSC = null,
+        uint swapChainFrameIndex = 0)
     {
         if (!waitSC.HasValue && !signalSC.HasValue)
         {
@@ -67,6 +86,7 @@ public readonly struct RHIDevice
         {
             WaitSwapChain = waitSC?.Handle ?? IntPtr.Zero,
             SignalSwapChain = signalSC?.Handle ?? IntPtr.Zero,
+            SwapChainFrameIndex = swapChainFrameIndex,
             PWaitSemaphores = IntPtr.Zero,
             WaitSemaphoreCount = 0,
             PSignalSemaphores = IntPtr.Zero,

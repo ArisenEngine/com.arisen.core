@@ -35,6 +35,10 @@ public sealed record CookedAssetRecord(
     long SizeInBytes,
     DateTime LastWriteTimeUtc);
 
+public readonly record struct CookedAssetIdentity(
+    Guid Guid,
+    string Variant);
+
 public readonly record struct CookedAssetHandle(
     int Index,
     int Generation,
@@ -109,7 +113,18 @@ public interface IAssetDatabase
 
     int InvalidateCookedAssets(Guid guid, string? variant = null);
 
+    int RemoveCookedArtifacts(IReadOnlyCollection<CookedAssetIdentity> identities);
+
     void NotifyAssetChanged(AssetChangeEvent change);
 
     IReadOnlyList<LoadedCookedAssetDiagnostic> GetLoadedCookedAssetDiagnostics();
+}
+
+/// <summary>
+/// Editor/setup-only source indexing boundary. Runtime asset consumers should use
+/// <see cref="IAssetDatabase"/> and must not rescan source directories.
+/// </summary>
+public interface IAssetSourceIndex
+{
+    void RefreshSourceDirectory(string directoryPath, string packageId);
 }

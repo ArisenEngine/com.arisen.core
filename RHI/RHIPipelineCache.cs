@@ -22,6 +22,19 @@ public class RHIPipelineCache
         return *(RHIPipelineHandle*)(&u);
     }
 
+    public void ReleasePipeline(RHIPipelineHandle handle)
+    {
+        if (!handle.IsValid)
+        {
+            return;
+        }
+
+        RHIPipelineAPI.RHIPipelineCache_ReleasePipeline(
+            NativePtr,
+            handle.Index,
+            handle.Generation);
+    }
+
     public RHIPipelineState GetPipelineState()
     {
         IntPtr ptr = RHIPipelineAPI.RHIPipelineCache_GetPipelineState(NativePtr);

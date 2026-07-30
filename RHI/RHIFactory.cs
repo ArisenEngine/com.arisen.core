@@ -170,6 +170,7 @@ public readonly struct RHIFactory
             addressModeV,
             addressModeW,
             0.0f,
+            1.0f,
             1.0f);
     }
 
@@ -183,17 +184,47 @@ public readonly struct RHIFactory
         float minLod,
         float maxLod)
     {
+        return CreateSampler(
+            magFilter,
+            minFilter,
+            mipmapMode,
+            addressModeU,
+            addressModeV,
+            addressModeW,
+            minLod,
+            maxLod,
+            1.0f);
+    }
+
+    public unsafe RHISamplerHandle CreateSampler(
+        EFilter magFilter,
+        EFilter minFilter,
+        ESamplerMipmapMode mipmapMode,
+        ESamplerAddressMode addressModeU,
+        ESamplerAddressMode addressModeV,
+        ESamplerAddressMode addressModeW,
+        float minLod,
+        float maxLod,
+        float maxAnisotropy)
+    {
         if (!float.IsFinite(minLod) || !float.IsFinite(maxLod) || minLod < 0.0f || maxLod < minLod)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(maxLod),
                 "Sampler LOD bounds must be finite, non-negative, and ordered.");
         }
+        if (!float.IsFinite(maxAnisotropy) || maxAnisotropy < 1.0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAnisotropy),
+                "Sampler anisotropy must be finite and at least one.");
+        }
 
         uint index = 0;
         uint gen = 0;
         RHIFactoryAPI.RHIFactory_CreateSampler(Handle, (int)magFilter, (int)minFilter, (int)mipmapMode,
-            (int)addressModeU, (int)addressModeV, (int)addressModeW, 0, 0, 1.0f, 0, 0, minLod, maxLod, 0, (IntPtr)(&index),
+            (int)addressModeU, (int)addressModeV, (int)addressModeW, 0,
+            maxAnisotropy > 1.0f ? 1 : 0, maxAnisotropy, 0, 0, minLod, maxLod, 0, (IntPtr)(&index),
             (IntPtr)(&gen));
         return new RHISamplerHandle { Index = index, Generation = gen };
     }

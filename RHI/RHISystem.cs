@@ -8,6 +8,7 @@ public static class RHISystem
 {
     private static RHIInstance? m_Instance;
     private static readonly ConcurrentDictionary<uint, RHIDevice> m_DeviceWrappers = new();
+    private static readonly ConcurrentDictionary<uint, RHISurface> m_SurfaceWrappers = new();
     private static RHIDevice? m_MasterDevice;
     private static readonly object m_SyncRoot = new();
     private static string m_LastInitializationError = string.Empty;
@@ -31,6 +32,26 @@ public static class RHISystem
     }
 
     public static string LastInitializationError => m_LastInitializationError;
+
+    public static RHISurface GetSurface(uint surfaceId)
+    {
+        if (m_SurfaceWrappers.TryGetValue(surfaceId, out var cachedSurface))
+            return cachedSurface;
+
+        lock (m_SyncRoot)
+        {
+            if (!m_Instance.HasValue || !m_Instance.Value.IsValid)
+                throw new InvalidOperationException("RHISystem must be initialized before resolving surfaces.");
+
+            if (m_SurfaceWrappers.TryGetValue(surfaceId, out cachedSurface))
+                return cachedSurface;
+
+            var surface = m_Instance.Value.GetSurface(surfaceId);
+            m_SurfaceWrappers.TryAdd(surfaceId, surface);
+            return surface;
+        }
+    }
+
     public static RHIDevice GetOrCreateDevice(uint windowId, uint width = 0, uint height = 0)
     {
         if (m_Instance == null)
@@ -77,11 +98,34 @@ public static class RHISystem
     {
         lock (m_SyncRoot)
         {
-            if (m_DeviceWrappers.TryRemove(windowId, out var device))
+            m_DeviceWrappers.TryRemove(windowId, out _);
+            m_SurfaceWrappers.TryRemove(windowId, out _);
+
+            // The bootstrap surface owns the shared logical device and remains alive until
+            // RHISystem shutdown. Viewport surfaces own only their surface/swapchain state.
+            if (windowId == DefaultVirtualSurfaceID ||
+                !m_Instance.HasValue ||
+                !m_Instance.Value.IsValid)
             {
-                // Note: The native device is destroyed in RHI 
-                // when the C# RHIDevice object is disposed or collected.
+                return;
             }
+
+            if (m_MasterDevice.HasValue && m_MasterDevice.Value.IsValid)
+            {
+                try
+                {
+                    m_MasterDevice.Value.WaitIdle();
+                }
+                catch (Exception e)
+                {
+                    KernelLog.WarningFormat(
+                        "[RHISystem] DeviceWaitIdle failed before removing surface 0x{0:X}: {1}",
+                        windowId,
+                        e.Message);
+                }
+            }
+
+            m_Instance.Value.DestroySurface(windowId);
         }
     }
 
@@ -151,6 +195,7 @@ public static class RHISystem
             }
 
             m_DeviceWrappers.Clear();
+            m_SurfaceWrappers.Clear();
             m_MasterDevice = null;
             m_Instance = null;
             m_PhysicalDevicePicked = false;

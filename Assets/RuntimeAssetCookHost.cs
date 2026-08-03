@@ -23,27 +23,35 @@ public static class RuntimeAssetCookHost
         ArgumentNullException.ThrowIfNull(args);
         EngineKernel kernel = EngineKernel.Instance;
         ProjectSubsystem? projectSubsystem = null;
+        bool ownsKernelLifetime = false;
         try
         {
             RuntimeAssetCookHostOptions options = RuntimeAssetCookHostOptions.Parse(args);
             kernel.Reset();
+            ownsKernelLifetime = true;
 
             projectSubsystem = new ProjectSubsystem();
-            kernel.Services.RegisterService<ProjectSubsystem>(projectSubsystem);
+            kernel.RegisterKernelOwnedService<ProjectSubsystem>(projectSubsystem);
             projectSubsystem.LoadFromWorkspace(options.WorkspaceRoot);
             ProjectManifest project = projectSubsystem.ActiveProject
                 ?? throw new InvalidDataException(
                     $"Workspace '{options.WorkspaceRoot}' could not be loaded for asset cooking.");
+            string sourceResolvedManifestPath = options.ResolvedManifestPath
+                ?? throw new FileNotFoundException(
+                    $"Source resolved manifest was not found for profile '{options.TargetProfile}'.");
 
-            EnginePackageGraphResolution packageGraph = EngineBootstrapper.ResolvePackageGraph(
-                options.WorkspaceRoot,
-                options.TargetProfile,
-                resolvedManifestPathOverride: options.ResolvedManifestPath);
+            EnginePackageGraphResolution packageGraph =
+                EngineBootstrapper.ResolveBuildStagePackageGraph(
+                    options.WorkspaceRoot,
+                    options.TargetProfile,
+                    sourceResolvedManifestPath,
+                    Path.Combine(AppContext.BaseDirectory, "manifest.resolved.json"));
             kernel.MountPackageGraph(new EngineConfig
             {
                 ProjectRoot = packageGraph.WorkspacePath,
                 ProjectName = Path.GetFileName(packageGraph.WorkspacePath),
                 PackageUrls = packageGraph.PackageUrls.ToList(),
+                PackageRequirements = packageGraph.PackageRequirements.ToList(),
                 Platform = RuntimePlatform.Windows,
                 ExecutionMode = EngineExecutionMode.RuntimeAssetCook
             });
@@ -100,12 +108,17 @@ public static class RuntimeAssetCookHost
         }
         finally
         {
-            if (kernel.IsPackageGraphMounted)
+            try
             {
-                kernel.Shutdown();
+                if (ownsKernelLifetime)
+                {
+                    kernel.Shutdown();
+                }
             }
-
-            projectSubsystem?.Shutdown();
+            finally
+            {
+                projectSubsystem?.Shutdown();
+            }
         }
     }
 

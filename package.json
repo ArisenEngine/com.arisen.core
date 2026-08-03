@@ -2,6 +2,9 @@
   "id": "com.arisen.core",
   "name": "Core",
   "version": "1.0.0",
+  "engine": {
+    "minVersion": "0.1.0"
+  },
   "layer": "foundation",
   "author": "",
   "description": "",

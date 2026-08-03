@@ -209,7 +209,7 @@ public readonly struct RHICommandBuffer
     public void TransitionImageLayout(RHIImageHandle image, EImageLayout oldLayout, EImageLayout targetLayout,
                                        uint srcQueueFamilyIndex, uint dstQueueFamilyIndex)
     {
-        RHICommandBufferExtAPI.RHICommandBuffer_TransitionImageLayoutWithQueueFamily(
+        RHICommandBufferAPI.RHICommandBuffer_TransitionImageLayoutWithQueueFamily(
             NativePtr, image, (int)oldLayout, (int)targetLayout,
             srcQueueFamilyIndex, dstQueueFamilyIndex);
     }
@@ -326,7 +326,7 @@ public readonly struct RHICommandBuffer
         uint width,
         uint height)
     {
-        RHICommandBufferExtAPI.RHICommandBuffer_CopyBufferToImage2DSubresource(
+        RHICommandBufferAPI.RHICommandBuffer_CopyBufferToImage2DSubresource(
             NativePtr,
             src,
             dst,
@@ -346,7 +346,7 @@ public readonly struct RHICommandBuffer
         uint width,
         uint height)
     {
-        RHICommandBufferExtAPI.RHICommandBuffer_CopyImageToBuffer2D(
+        RHICommandBufferAPI.RHICommandBuffer_CopyImageToBuffer2D(
             NativePtr,
             src,
             (int)srcImageLayout,

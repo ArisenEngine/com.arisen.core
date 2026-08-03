@@ -98,34 +98,22 @@ public static class RHISystem
     {
         lock (m_SyncRoot)
         {
-            m_DeviceWrappers.TryRemove(windowId, out _);
-            m_SurfaceWrappers.TryRemove(windowId, out _);
-
             // The bootstrap surface owns the shared logical device and remains alive until
             // RHISystem shutdown. Viewport surfaces own only their surface/swapchain state.
             if (windowId == DefaultVirtualSurfaceID ||
                 !m_Instance.HasValue ||
                 !m_Instance.Value.IsValid)
             {
+                m_DeviceWrappers.TryRemove(windowId, out _);
+                m_SurfaceWrappers.TryRemove(windowId, out _);
                 return;
             }
 
-            if (m_MasterDevice.HasValue && m_MasterDevice.Value.IsValid)
-            {
-                try
-                {
-                    m_MasterDevice.Value.WaitIdle();
-                }
-                catch (Exception e)
-                {
-                    KernelLog.WarningFormat(
-                        "[RHISystem] DeviceWaitIdle failed before removing surface 0x{0:X}: {1}",
-                        windowId,
-                        e.Message);
-                }
-            }
-
+            // Native destruction validates frame and external-consumer ownership. Keep the
+            // managed wrappers published until that transaction commits successfully.
             m_Instance.Value.DestroySurface(windowId);
+            m_DeviceWrappers.TryRemove(windowId, out _);
+            m_SurfaceWrappers.TryRemove(windowId, out _);
         }
     }
 

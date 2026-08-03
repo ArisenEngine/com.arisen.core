@@ -27,6 +27,12 @@ public readonly struct RHISwapChain
         RHISwapChainAPI.RHISwapChain_EndFrame(Handle, frameIndex);
     }
 
+    public ulong RetireFrame(uint frameIndex)
+    {
+        if (!IsValid) return 0;
+        return RHISwapChainAPI.RHISwapChain_RetireFrame(Handle, frameIndex);
+    }
+
     public IntPtr GetSharedWin32Handle(uint index)
     {
         if (!IsValid) return IntPtr.Zero;

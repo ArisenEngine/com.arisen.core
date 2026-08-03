@@ -27,12 +27,12 @@ public readonly struct RHIPipelineState
 
     public void AddVertexBindingDescription(uint binding, uint stride, EVertexInputRate inputRate)
     {
-        RHIPipelineStateExtAPI.RHIPipelineState_AddVertexBindingDescription(NativePtr, binding, stride, (int)inputRate);
+        RHIPipelineAPI.RHIPipelineState_AddVertexBindingDescription(NativePtr, binding, stride, (int)inputRate);
     }
 
     public void AddVertexInputAttributeDescription(uint location, uint binding, EFormat format, uint offset)
     {
-        RHIPipelineStateExtAPI.RHIPipelineState_AddVertexInputAttributeDescription(
+        RHIPipelineAPI.RHIPipelineState_AddVertexInputAttributeDescription(
             NativePtr,
             location,
             binding,
@@ -42,7 +42,7 @@ public readonly struct RHIPipelineState
 
     public void ClearVertexInputDescriptions()
     {
-        RHIPipelineStateExtAPI.RHIPipelineState_ClearVertexInputDescriptions(NativePtr);
+        RHIPipelineAPI.RHIPipelineState_ClearVertexInputDescriptions(NativePtr);
     }
 
     public void SetRasterizationState(EPolygonMode polygonMode, ECullModeFlagBits cullMode, EFrontFace frontFace)

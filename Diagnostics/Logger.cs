@@ -8,37 +8,77 @@ namespace ArisenEngine.Core.Diagnostics;
 
 public static class Logger
 {
+    private const int NotificationQueueCapacity = 8192;
+    private static readonly object s_LifecycleLock = new();
+    private static readonly object s_SubscriberLock = new();
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void LogCallback(uint type, [MarshalAs(UnmanagedType.LPUTF8Str)] string threadInfo,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string msg, [MarshalAs(UnmanagedType.LPUTF8Str)] string trace);
 
-    private static LogCallback? m_ReceiveLog;
+    private static readonly LogCallback s_ReceiveLog = RecordLog;
+    private static OrderedNotificationDispatcher<LogNotification>? s_NotificationDispatcher;
+    private static Action<LogMessage>? s_MessageAdded;
+    private static Action? s_MessageCleared;
+    private static Exception? s_LastShutdownFailure;
+    private static bool s_AcceptsSubscribers;
+    private static bool s_IsInitialized;
+    private static long s_LateNativeCallbackCount;
 
     internal static void RecordLog(uint type, string threadInfo, string msg, string trace)
     {
-        string threadId = "0";
-        string threadName = "Unknown";
-
-        if (!string.IsNullOrEmpty(threadInfo))
+        OrderedNotificationDispatcher<LogNotification>? dispatcher =
+            Volatile.Read(ref s_NotificationDispatcher);
+        if (dispatcher == null)
         {
-            if (long.TryParse(threadInfo, out _))
-            {
-                threadId = threadInfo;
-            }
-            else
-            {
-                threadName = threadInfo;
-            }
+            Interlocked.Increment(ref s_LateNativeCallbackCount);
+            return;
         }
 
-        var message = new LogMessage((LogLevel)type, msg, threadId, threadName, DateTime.Now, trace);
+        try
+        {
+            string threadId = "0";
+            string threadName = "Unknown";
 
-        Task.Run(() => { MessageAdded?.Invoke(message); });
+            if (!string.IsNullOrEmpty(threadInfo))
+            {
+                if (long.TryParse(threadInfo, out _))
+                {
+                    threadId = threadInfo;
+                }
+                else
+                {
+                    threadName = threadInfo;
+                }
+            }
+
+            var message = new LogMessage((LogLevel)type, msg, threadId, threadName, DateTime.Now, trace);
+            NotificationPostResult result = dispatcher.Post(LogNotification.Add(message));
+            if (result == NotificationPostResult.Stopped)
+            {
+                Interlocked.Increment(ref s_LateNativeCallbackCount);
+            }
+        }
+        catch (Exception error)
+        {
+            // Reverse P/Invoke callbacks must not unwind into native logging code.
+            dispatcher.ReportIntakeFailure(error);
+        }
     }
 
-    static Logger()
+    private enum LogNotificationKind
     {
-        m_ReceiveLog = new LogCallback(RecordLog);
+        Add,
+        Clear
+    }
+
+    private readonly record struct LogNotification(LogNotificationKind Kind, LogMessage? Message)
+    {
+        public static LogNotification Add(LogMessage message) =>
+            new(LogNotificationKind.Add, message);
+
+        public static LogNotification Clear() =>
+            new(LogNotificationKind.Clear, null);
     }
 
     public enum LogLevel
@@ -76,15 +116,145 @@ public static class Logger
         }
     }
 
-    public static Action<LogMessage>? MessageAdded;
-    public static Action? MessageCleared;
+    public static event Action<LogMessage>? MessageAdded
+    {
+        add
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (s_SubscriberLock)
+            {
+                if (!s_AcceptsSubscribers)
+                {
+                    throw new InvalidOperationException(
+                        "The diagnostics logger is not accepting event subscribers.");
+                }
 
-    public static bool IsInitialized { get; private set; }
+                s_MessageAdded += value;
+            }
+        }
+        remove
+        {
+            lock (s_SubscriberLock)
+            {
+                s_MessageAdded -= value;
+            }
+        }
+    }
+
+    public static event Action? MessageCleared
+    {
+        add
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (s_SubscriberLock)
+            {
+                if (!s_AcceptsSubscribers)
+                {
+                    throw new InvalidOperationException(
+                        "The diagnostics logger is not accepting event subscribers.");
+                }
+
+                s_MessageCleared += value;
+            }
+        }
+        remove
+        {
+            lock (s_SubscriberLock)
+            {
+                s_MessageCleared -= value;
+            }
+        }
+    }
+
+    public static bool IsInitialized => Volatile.Read(ref s_IsInitialized);
 
     public static void Dispose()
     {
-        LoggerAPI.Logger_Shutdown();
-        IsInitialized = false;
+        lock (s_LifecycleLock)
+        {
+            if (!IsInitialized)
+            {
+                if (s_LastShutdownFailure != null) throw s_LastShutdownFailure;
+                return;
+            }
+
+            OrderedNotificationDispatcher<LogNotification>? dispatcher =
+                Volatile.Read(ref s_NotificationDispatcher);
+            if (dispatcher?.IsDispatchThread == true)
+            {
+                throw new InvalidOperationException(
+                    "The diagnostics logger cannot be shut down from one of its event subscribers.");
+            }
+
+            lock (s_SubscriberLock)
+            {
+                s_AcceptsSubscribers = false;
+            }
+
+            var failures = new List<Exception>();
+            try
+            {
+                try
+                {
+                    LoggerAPI.Logger_Shutdown();
+                }
+                catch (Exception error)
+                {
+                    AddFailure(failures, new InvalidOperationException(
+                        "Native diagnostics shutdown failed before callback ownership was released.",
+                        error));
+                }
+
+                if (dispatcher != null)
+                {
+                    try
+                    {
+                        dispatcher.RequestStop();
+                    }
+                    catch (Exception error)
+                    {
+                        AddFailure(failures, new InvalidOperationException(
+                            "Failed to stop managed diagnostics notification admission.",
+                            error));
+                    }
+
+                    try
+                    {
+                        dispatcher.Dispose();
+                    }
+                    catch (Exception error)
+                    {
+                        AddFailure(failures, error);
+                    }
+                }
+
+                long lateCallbackCount = Interlocked.Read(ref s_LateNativeCallbackCount);
+                if (lateCallbackCount != 0)
+                {
+                    failures.Add(new InvalidOperationException(
+                        $"Native diagnostics issued {lateCallbackCount} callback(s) outside the owned dispatcher lifetime."));
+                }
+            }
+            finally
+            {
+                Volatile.Write(ref s_NotificationDispatcher, null);
+                lock (s_SubscriberLock)
+                {
+                    s_MessageAdded = null;
+                    s_MessageCleared = null;
+                }
+
+                Volatile.Write(ref s_IsInitialized, false);
+            }
+
+            Exception? shutdownFailure = failures.Count == 0
+                ? null
+                : new AggregateException(
+                    "Diagnostics shutdown completed with one or more attributable failures.",
+                    failures);
+            s_LastShutdownFailure = shutdownFailure;
+            if (shutdownFailure != null) throw shutdownFailure;
+        }
     }
 
     [Conditional("DEBUG")]
@@ -250,22 +420,166 @@ public static class Logger
 
     public static void Clear()
     {
-        MessageCleared?.Invoke();
+        OrderedNotificationDispatcher<LogNotification>? dispatcher =
+            Volatile.Read(ref s_NotificationDispatcher);
+        if (dispatcher != null)
+        {
+            NotificationPostResult result = dispatcher.Post(LogNotification.Clear());
+            if (result == NotificationPostResult.Stopped)
+            {
+                throw new InvalidOperationException(
+                    "The diagnostics notification dispatcher is stopping.");
+            }
+
+            return;
+        }
+
+        Action? messageCleared;
+        lock (s_SubscriberLock)
+        {
+            if (!s_AcceptsSubscribers) return;
+            messageCleared = s_MessageCleared;
+        }
+
+        messageCleared?.Invoke();
     }
 
     public static bool Initialize(bool bindCallback = false)
     {
-        if (IsInitialized) return true;
-        
-        bool ok = LoggerAPI.Logger_Initialize(bindCallback);
-        if (bindCallback && m_ReceiveLog != null && ok)
+        lock (s_LifecycleLock)
         {
-            var ptr = Marshal.GetFunctionPointerForDelegate(m_ReceiveLog);
-            LoggerAPI.Logger_BindCallback(ptr);
+            if (IsInitialized) return true;
+
+            OrderedNotificationDispatcher<LogNotification>? dispatcher = null;
+            bool nativeInitialized = false;
+            Interlocked.Exchange(ref s_LateNativeCallbackCount, 0);
+            try
+            {
+                if (bindCallback)
+                {
+                    dispatcher = new OrderedNotificationDispatcher<LogNotification>(
+                        "Arisen Diagnostics Notifications",
+                        NotificationQueueCapacity,
+                        DispatchNotification);
+                    Volatile.Write(ref s_NotificationDispatcher, dispatcher);
+                }
+
+                bool ok = LoggerAPI.Logger_Initialize(bindCallback);
+                if (!ok)
+                {
+                    Volatile.Write(ref s_NotificationDispatcher, null);
+                    if (dispatcher != null)
+                    {
+                        dispatcher.RequestStop();
+                        dispatcher.Dispose();
+                    }
+
+                    return false;
+                }
+
+                nativeInitialized = true;
+                if (bindCallback)
+                {
+                    IntPtr ptr = Marshal.GetFunctionPointerForDelegate(s_ReceiveLog);
+                    LoggerAPI.Logger_BindCallback(ptr);
+                }
+
+                lock (s_SubscriberLock)
+                {
+                    s_AcceptsSubscribers = true;
+                }
+
+                s_LastShutdownFailure = null;
+                Volatile.Write(ref s_IsInitialized, true);
+                return true;
+            }
+            catch (Exception initializationError)
+            {
+                var failures = new List<Exception> { initializationError };
+                if (nativeInitialized)
+                {
+                    try
+                    {
+                        LoggerAPI.Logger_Shutdown();
+                    }
+                    catch (Exception shutdownError)
+                    {
+                        AddFailure(failures, new InvalidOperationException(
+                            "Native diagnostics rollback failed.",
+                            shutdownError));
+                    }
+                }
+
+                if (dispatcher != null)
+                {
+                    try
+                    {
+                        dispatcher.RequestStop();
+                        dispatcher.Dispose();
+                    }
+                    catch (Exception dispatcherError)
+                    {
+                        AddFailure(failures, dispatcherError);
+                    }
+                }
+
+                Volatile.Write(ref s_NotificationDispatcher, null);
+                lock (s_SubscriberLock)
+                {
+                    s_AcceptsSubscribers = false;
+                    s_MessageAdded = null;
+                    s_MessageCleared = null;
+                }
+
+                Volatile.Write(ref s_IsInitialized, false);
+                if (failures.Count == 1) throw;
+                throw new AggregateException(
+                    "Diagnostics initialization failed and rollback reported additional errors.",
+                    failures);
+            }
+        }
+    }
+
+    private static void DispatchNotification(LogNotification notification)
+    {
+        switch (notification.Kind)
+        {
+            case LogNotificationKind.Add:
+            {
+                Action<LogMessage>? messageAdded;
+                lock (s_SubscriberLock)
+                {
+                    messageAdded = s_MessageAdded;
+                }
+
+                messageAdded?.Invoke(notification.Message!);
+                break;
+            }
+            case LogNotificationKind.Clear:
+            {
+                Action? messageCleared;
+                lock (s_SubscriberLock)
+                {
+                    messageCleared = s_MessageCleared;
+                }
+
+                messageCleared?.Invoke();
+                break;
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(notification));
+        }
+    }
+
+    private static void AddFailure(List<Exception> failures, Exception error)
+    {
+        if (error is AggregateException aggregate)
+        {
+            failures.AddRange(aggregate.Flatten().InnerExceptions);
+            return;
         }
 
-        IsInitialized = ok;
-        return ok;
+        failures.Add(error);
     }
 }
 
@@ -274,8 +588,8 @@ public static class Logger
 /// </summary>
 public class EngineLogger : ILogger
 {
-    public void Log(string message) => Logger.Log(message);
-    public void LogFormat(string format, params object[] args) => Logger.Log(string.Format(format, args));
+    public void Log(string message) => Logger.Info(message);
+    public void LogFormat(string format, params object[] args) => Logger.Info(string.Format(format, args));
 
     public void Warning(string message) => Logger.Warning(message);
     public void WarningFormat(string format, params object[] args) => Logger.Warning(string.Format(format, args));

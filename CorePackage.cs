@@ -15,7 +15,10 @@ public class CorePackage : IPackageEntry
 
     public void OnLoad(IServiceRegistry registry)
     {
-        NativeRuntime.InitializeDiagnostics(registry);
+        if (!NativeRuntime.InitializeDiagnostics(registry))
+        {
+            throw new InvalidOperationException("Core diagnostics initialization failed.");
+        }
         
         // Register core singleton services
         registry.RegisterService<ICommandManager>(new CommandManager());
@@ -28,5 +31,7 @@ public class CorePackage : IPackageEntry
     public void OnUnload(IServiceRegistry registry)
     {
         m_RuntimeAssetCookerRegistry = null;
+        KernelLog.Info("[CorePackage] Completing diagnostics logging.");
+        NativeRuntime.Shutdown();
     }
 }

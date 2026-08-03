@@ -35,6 +35,82 @@ public sealed record CookedAssetRecord(
     long SizeInBytes,
     DateTime LastWriteTimeUtc);
 
+internal interface ICookedArtifactWriteOwner
+{
+    CookedAssetRecord CommitCookedArtifactWrite(
+        CookedArtifactWrite write,
+        string assetType);
+
+    void DiscardCookedArtifactWrite(CookedArtifactWrite write);
+}
+
+/// <summary>
+/// Owns one unpublished cooked artifact until it is atomically committed to the registry.
+/// </summary>
+public sealed class CookedArtifactWrite : IDisposable
+{
+    private readonly object m_Gate = new();
+    private ICookedArtifactWriteOwner? m_Owner;
+
+    internal CookedArtifactWrite(
+        ICookedArtifactWriteOwner owner,
+        Guid transactionId,
+        Guid guid,
+        string variant,
+        string extension,
+        string cookedRoot,
+        string outputPath)
+    {
+        m_Owner = owner;
+        TransactionId = transactionId;
+        Guid = guid;
+        Variant = variant;
+        Extension = extension;
+        CookedRoot = cookedRoot;
+        OutputPath = outputPath;
+    }
+
+    public Guid Guid { get; }
+
+    public string Variant { get; }
+
+    public string OutputPath { get; }
+
+    internal Guid TransactionId { get; }
+
+    internal string Extension { get; }
+
+    internal string CookedRoot { get; }
+
+    public CookedAssetRecord Commit(string assetType)
+    {
+        lock (m_Gate)
+        {
+            ICookedArtifactWriteOwner owner = m_Owner ??
+                throw new ObjectDisposedException(
+                    nameof(CookedArtifactWrite),
+                    "The cooked artifact write has already been committed or discarded.");
+            CookedAssetRecord artifact = owner.CommitCookedArtifactWrite(this, assetType);
+            m_Owner = null;
+            return artifact;
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (m_Gate)
+        {
+            if (m_Owner == null)
+            {
+                return;
+            }
+
+            m_Owner.DiscardCookedArtifactWrite(this);
+            m_Owner = null;
+        }
+    }
+}
+
 public readonly record struct CookedAssetIdentity(
     Guid Guid,
     string Variant);
@@ -97,9 +173,10 @@ public interface IAssetDatabase
 
     bool TryGetCookedArtifact(Guid guid, string variant, out CookedAssetRecord artifact);
 
-    string GetCookedArtifactPath(Guid guid, string variant, string extension);
-
-    void RegisterCookedArtifact(CookedAssetRecord artifact);
+    CookedArtifactWrite BeginCookedArtifactWrite(
+        Guid guid,
+        string variant,
+        string extension);
 
     bool TryLoadCookedAsset(Guid guid, string variant, string expectedAssetType, out CookedAssetHandle handle);
 

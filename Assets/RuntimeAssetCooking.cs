@@ -106,6 +106,8 @@ public interface IRuntimeAssetCookerRegistry
 {
     void RegisterCooker(IRuntimeAssetCooker cooker);
 
+    bool UnregisterCooker(IRuntimeAssetCooker cooker);
+
     bool TryGetCooker(string assetType, out IRuntimeAssetCooker cooker);
 
     IReadOnlyCollection<RuntimeAssetCookerRegistration> GetRegistrations();
@@ -151,6 +153,24 @@ public sealed class RuntimeAssetCookerRegistry : IRuntimeAssetCookerRegistry
         {
             m_Cookers.Add(assetType, cooker);
         }
+    }
+
+    public bool UnregisterCooker(IRuntimeAssetCooker cooker)
+    {
+        if (cooker == null) return false;
+
+        string[] assetTypes = m_Cookers
+            .Where(pair => ReferenceEquals(pair.Value, cooker))
+            .Select(pair => pair.Key)
+            .ToArray();
+        if (assetTypes.Length == 0) return false;
+
+        foreach (string assetType in assetTypes)
+        {
+            m_Cookers.Remove(assetType);
+        }
+
+        return true;
     }
 
     public bool TryGetCooker(string assetType, out IRuntimeAssetCooker cooker)

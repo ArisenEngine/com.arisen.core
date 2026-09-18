@@ -648,6 +648,276 @@ public class AssetDatabase : IAssetDatabase, IAssetSourceIndex, ICookedArtifactW
         return artifact;
     }
 
+    public IReadOnlyList<CookedAssetRecord> PublishCookedArtifactSet(
+        IReadOnlyCollection<CookedArtifactSetEntry> entries,
+        IReadOnlyCollection<CookedAssetIdentity> removals)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(removals);
+        if (entries.Count == 0 && removals.Count == 0)
+        {
+            return Array.Empty<CookedAssetRecord>();
+        }
+
+        lock (m_CookedRegistryWriterGate)
+        {
+            EnsureMutable("publish a cooked artifact set");
+            if (string.IsNullOrWhiteSpace(CookedRoot))
+            {
+                throw new InvalidOperationException("[AssetDatabase] CookedRoot is not initialized.");
+            }
+
+            string cookedRoot = Path.GetFullPath(CookedRoot);
+            CookedRegistrySnapshot previous = ReadCookedRegistrySnapshot();
+            var entryByKey = new Dictionary<string, CookedArtifactSetEntry>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (CookedArtifactSetEntry entry in entries
+                         .OrderBy(entry => entry.Guid)
+                         .ThenBy(entry => entry.Variant, StringComparer.Ordinal))
+            {
+                ValidateCookedIdentity(new CookedAssetIdentity(entry.Guid, entry.Variant));
+                if (string.IsNullOrWhiteSpace(entry.AssetType) || entry.Payload is not { Length: > 0 })
+                {
+                    throw new ArgumentException(
+                        "Cooked artifact set entries require an asset type and non-empty payload.",
+                        nameof(entries));
+                }
+
+                string key = MakeCookedKey(entry.Guid, entry.Variant);
+                if (!entryByKey.TryAdd(
+                        key,
+                        entry with
+                        {
+                            AssetType = entry.AssetType.Trim(),
+                            Variant = entry.Variant.Trim(),
+                            Extension = NormalizeCookedExtension(entry.Extension)
+                        }))
+                {
+                    throw new InvalidOperationException(
+                        $"[AssetDatabase] Cooked artifact set contains duplicate identity " +
+                        $"'{entry.Guid:D}:{entry.Variant}'.");
+                }
+            }
+
+            var removalKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (CookedAssetIdentity removal in removals
+                         .OrderBy(removal => removal.Guid)
+                         .ThenBy(removal => removal.Variant, StringComparer.Ordinal))
+            {
+                ValidateCookedIdentity(removal);
+                string key = MakeCookedKey(removal.Guid, removal.Variant);
+                if (!removalKeys.Add(key))
+                {
+                    continue;
+                }
+
+                if (entryByKey.ContainsKey(key))
+                {
+                    throw new InvalidOperationException(
+                        $"[AssetDatabase] Cooked artifact set cannot replace and remove " +
+                        $"'{removal.Guid:D}:{removal.Variant}' in one publication.");
+                }
+            }
+
+            Guid transactionId = Guid.NewGuid();
+            string transactionRoot = Path.Combine(
+                cookedRoot,
+                ".set",
+                transactionId.ToString("N"));
+            string stagedRoot = Path.Combine(transactionRoot, "staged");
+            string backupRoot = Path.Combine(transactionRoot, "backup");
+            var installed = new List<string>(entryByKey.Count);
+            var backups = new List<(string Original, string Backup)>();
+            var changedIdentities = new List<CookedAssetIdentity>(entryByKey.Count + removalKeys.Count);
+            var affectedPaths = new Dictionary<string, CookedAssetRecord>(
+                StringComparer.OrdinalIgnoreCase);
+            var candidateArtifacts = CloneCookedArtifacts(previous);
+            var published = new List<CookedAssetRecord>(entryByKey.Count);
+
+            try
+            {
+                Directory.CreateDirectory(stagedRoot);
+                foreach ((string key, CookedArtifactSetEntry entry) in entryByKey)
+                {
+                    string stagedPath = Path.Combine(
+                        stagedRoot,
+                        $"{entry.Guid:N}.{SanitizeFileName(entry.Variant)}{entry.Extension}");
+                    File.WriteAllBytes(stagedPath, entry.Payload);
+
+                    if (previous.Artifacts.TryGetValue(key, out CookedAssetRecord? existing) &&
+                        existing != null &&
+                        string.Equals(existing.AssetType, entry.AssetType, StringComparison.OrdinalIgnoreCase) &&
+                        FilesAreByteIdentical(existing.Path, stagedPath))
+                    {
+                        candidateArtifacts[key] = existing;
+                        published.Add(existing);
+                        continue;
+                    }
+
+                    changedIdentities.Add(new CookedAssetIdentity(entry.Guid, entry.Variant));
+                    if (previous.Artifacts.TryGetValue(key, out existing) && existing != null)
+                    {
+                        string existingPath = ValidateCookedCachePath(cookedRoot, existing);
+                        if (!affectedPaths.TryAdd(existingPath, existing))
+                        {
+                            throw new InvalidOperationException(
+                                $"[AssetDatabase] Cooked artifact set reuses cache path " +
+                                $"'{existingPath}' across replaced identities.");
+                        }
+                    }
+
+                    string finalDirectory = Path.Combine(cookedRoot, entry.Guid.ToString("N"));
+                    Directory.CreateDirectory(finalDirectory);
+                    long artifactGeneration = NextCookedRegistryGeneration(previous.Generation);
+                    string finalPath = Path.Combine(
+                        finalDirectory,
+                        $"{SanitizeFileName(entry.Variant)}.g{artifactGeneration:D20}." +
+                        $"{transactionId:N}{entry.Extension}");
+                    File.Move(stagedPath, finalPath);
+                    installed.Add(finalPath);
+                    var output = new FileInfo(finalPath);
+                    var artifact = new CookedAssetRecord(
+                        entry.Guid,
+                        entry.AssetType,
+                        entry.Variant,
+                        output.FullName,
+                        output.Length,
+                        output.LastWriteTimeUtc);
+                    candidateArtifacts[key] = artifact;
+                    published.Add(artifact);
+                }
+
+                foreach (string key in removalKeys)
+                {
+                    if (!previous.Artifacts.TryGetValue(key, out CookedAssetRecord? existing) ||
+                        existing == null)
+                    {
+                        continue;
+                    }
+
+                    string existingPath = ValidateCookedCachePath(cookedRoot, existing);
+                    if (!affectedPaths.TryAdd(existingPath, existing))
+                    {
+                        throw new InvalidOperationException(
+                            $"[AssetDatabase] Cooked artifact set reuses cache path " +
+                            $"'{existingPath}' across removed identities.");
+                    }
+
+                    candidateArtifacts.Remove(key);
+                    changedIdentities.Add(new CookedAssetIdentity(existing.Guid, existing.Variant));
+                }
+
+                foreach ((string original, CookedAssetRecord _) in affectedPaths)
+                {
+                    if (!File.Exists(original))
+                    {
+                        continue;
+                    }
+
+                    string relative = Path.GetRelativePath(cookedRoot, original);
+                    string backup = Path.Combine(backupRoot, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+                    File.Move(original, backup);
+                    backups.Add((original, backup));
+                }
+
+                if (changedIdentities.Count > 0)
+                {
+                    long candidateGeneration = NextCookedRegistryGeneration(previous.Generation);
+                    CookedRegistrySnapshot candidate = CreateCookedRegistrySnapshot(
+                        candidateGeneration,
+                        candidateArtifacts);
+                    lock (m_LoadedCookedAssetGate)
+                    {
+                        EnsureExpectedCookedRegistrySnapshot(previous);
+                        WriteCookedManifest(previous, candidate);
+                        foreach (CookedAssetIdentity identity in changedIdentities)
+                        {
+                            ReleaseLoadedCookedAssetsCore(identity.Guid, identity.Variant);
+                        }
+
+                        Volatile.Write(ref m_CookedRegistrySnapshot, candidate);
+                    }
+                }
+
+                foreach ((string _, string backup) in backups)
+                {
+                    try
+                    {
+                        if (File.Exists(backup))
+                        {
+                            File.Delete(backup);
+                        }
+                    }
+                    catch (Exception cleanupError)
+                    {
+                        Logger.Warning(
+                            $"[AssetDatabase] Cooked artifact set committed, but old artifact " +
+                            $"'{backup}' could not be deleted: {cleanupError.Message}");
+                    }
+                }
+
+                TryDeleteDirectory(transactionRoot);
+                TryDeleteEmptyDirectory(Path.Combine(cookedRoot, ".set"), cookedRoot);
+                return published
+                    .OrderBy(artifact => artifact.Guid)
+                    .ThenBy(artifact => artifact.Variant, StringComparer.Ordinal)
+                    .ToArray();
+            }
+            catch (Exception commitError)
+            {
+                var rollbackErrors = new List<Exception>();
+                for (int index = installed.Count - 1; index >= 0; index--)
+                {
+                    string path = installed[index];
+                    try
+                    {
+                        if (File.Exists(path)) File.Delete(path);
+                    }
+                    catch (Exception error)
+                    {
+                        rollbackErrors.Add(error);
+                    }
+                }
+
+                for (int index = backups.Count - 1; index >= 0; index--)
+                {
+                    (string original, string backup) = backups[index];
+                    if (!File.Exists(backup)) continue;
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+                        File.Move(backup, original, overwrite: true);
+                    }
+                    catch (Exception error)
+                    {
+                        rollbackErrors.Add(error);
+                    }
+                }
+
+                try
+                {
+                    TryDeleteDirectory(transactionRoot);
+                    TryDeleteEmptyDirectory(Path.Combine(cookedRoot, ".set"), cookedRoot);
+                }
+                catch (Exception error)
+                {
+                    rollbackErrors.Add(error);
+                }
+
+                if (rollbackErrors.Count > 0)
+                {
+                    rollbackErrors.Insert(0, commitError);
+                    throw new AggregateException(
+                        "[AssetDatabase] Cooked artifact set publication failed and rollback was incomplete.",
+                        rollbackErrors);
+                }
+
+                throw;
+            }
+        }
+    }
+
     void ICookedArtifactWriteOwner.DiscardCookedArtifactWrite(CookedArtifactWrite write)
     {
         ArgumentNullException.ThrowIfNull(write);

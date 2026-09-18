@@ -115,6 +115,17 @@ public readonly record struct CookedAssetIdentity(
     Guid Guid,
     string Variant);
 
+/// <summary>
+/// One fully staged cooked artifact in a set publication. The payload is copied before
+/// the registry is changed, so a set can be committed or rejected as a whole.
+/// </summary>
+public sealed record CookedArtifactSetEntry(
+    Guid Guid,
+    string AssetType,
+    string Variant,
+    string Extension,
+    byte[] Payload);
+
 public readonly record struct CookedAssetHandle(
     int Index,
     int Generation,
@@ -177,6 +188,10 @@ public interface IAssetDatabase
         Guid guid,
         string variant,
         string extension);
+
+    IReadOnlyList<CookedAssetRecord> PublishCookedArtifactSet(
+        IReadOnlyCollection<CookedArtifactSetEntry> entries,
+        IReadOnlyCollection<CookedAssetIdentity> removals);
 
     bool TryLoadCookedAsset(Guid guid, string variant, string expectedAssetType, out CookedAssetHandle handle);
 

@@ -108,6 +108,19 @@ public readonly struct RHIInstance
     }
 
     /// <summary>
+    /// Overrides the present mode of a surface's next swapchain creation. The override is applied
+    /// when the swapchain is created, so it must be set before the first frame is presented.
+    /// </summary>
+    public void SetPresentMode(uint surfaceId, EPresentMode presentMode)
+    {
+        if (!IsValid) return;
+        RHIInstanceAPI.RHIInstance_SetCurrentPresentMode(
+            Handle,
+            surfaceId,
+            unchecked((int)(uint)presentMode));
+    }
+
+    /// <summary>
     /// Creates a logic device for the picked physical device.
     /// In the future, this might allow selecting a specific physical device.
     /// </summary>

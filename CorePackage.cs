@@ -6,6 +6,7 @@ using ArisenEngine.Core.Diagnostics;
 using ArisenEngine.Core.Lifecycle;
 using ArisenEngine.Core.Automation;
 using ArisenEngine.Core.Assets;
+using ArisenEngine.Core.Memory;
 
 namespace ArisenEngine.Core;
 
@@ -19,7 +20,12 @@ public class CorePackage : IPackageEntry
         {
             throw new InvalidOperationException("Core diagnostics initialization failed.");
         }
-        
+
+        // The frame arena lives for the whole package lifetime. The kernel frame boundary
+        // reclaims it after every subsystem has ticked, so producers such as MeshSystem and
+        // RenderSubsystem only ever see one frame of transient data in it.
+        MemoryManager.Initialize();
+
         // Register core singleton services
         registry.RegisterService<ICommandManager>(new CommandManager());
         m_RuntimeAssetCookerRegistry = new RuntimeAssetCookerRegistry();
@@ -30,6 +36,7 @@ public class CorePackage : IPackageEntry
 
     public void OnUnload(IServiceRegistry registry)
     {
+        MemoryManager.Shutdown();
         m_RuntimeAssetCookerRegistry = null;
         KernelLog.Info("[CorePackage] Completing diagnostics logging.");
         NativeRuntime.Shutdown();

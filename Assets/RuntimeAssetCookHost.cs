@@ -201,7 +201,7 @@ public static class RuntimeAssetCookHost
         public static RuntimeAssetCookHostOptions Parse(IReadOnlyList<string> args)
         {
             string workspaceRoot = string.Empty;
-            string targetProfile = "Production";
+            string targetProfile = string.Empty;
             string configuration = "Release";
             string runtimeIdentifier = "win-x64";
             string stagingRoot = string.Empty;
@@ -244,6 +244,11 @@ public static class RuntimeAssetCookHost
             {
                 throw new ArgumentException(
                     $"{Command} requires --workspace <absolute-or-relative-path>.");
+            }
+
+            if (string.IsNullOrWhiteSpace(targetProfile))
+            {
+                throw new ArgumentException($"{Command} requires --profile <name>.");
             }
 
             workspaceRoot = Path.GetFullPath(workspaceRoot);

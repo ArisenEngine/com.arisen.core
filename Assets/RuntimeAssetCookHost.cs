@@ -27,46 +27,25 @@ public static class RuntimeAssetCookHost
         try
         {
             RuntimeAssetCookHostOptions options = RuntimeAssetCookHostOptions.Parse(args);
-            kernel.Reset();
+            RuntimeAssetBuildStageHost.Mount mount = RuntimeAssetBuildStageHost.Open(
+                options.WorkspaceRoot,
+                options.TargetProfile,
+                options.ResolvedManifestPath);
+            kernel = mount.Kernel;
+            projectSubsystem = mount.ProjectSubsystem;
             ownsKernelLifetime = true;
-
-            projectSubsystem = new ProjectSubsystem();
-            kernel.RegisterKernelOwnedService<ProjectSubsystem>(projectSubsystem);
-            projectSubsystem.LoadFromWorkspace(options.WorkspaceRoot);
-            ProjectManifest project = projectSubsystem.ActiveProject
-                ?? throw new InvalidDataException(
-                    $"Workspace '{options.WorkspaceRoot}' could not be loaded for asset cooking.");
-            string sourceResolvedManifestPath = options.ResolvedManifestPath
-                ?? throw new FileNotFoundException(
-                    $"Source resolved manifest was not found for profile '{options.TargetProfile}'.");
-
-            EnginePackageGraphResolution packageGraph =
-                EngineBootstrapper.ResolveBuildStagePackageGraph(
-                    options.WorkspaceRoot,
-                    options.TargetProfile,
-                    sourceResolvedManifestPath,
-                    Path.Combine(AppContext.BaseDirectory, "manifest.resolved.json"));
-            kernel.MountPackageGraph(new EngineConfig
-            {
-                ProjectRoot = packageGraph.WorkspacePath,
-                ProjectName = Path.GetFileName(packageGraph.WorkspacePath),
-                PackageUrls = packageGraph.PackageUrls.ToList(),
-                PackageRequirements = packageGraph.PackageRequirements.ToList(),
-                Platform = RuntimePlatform.Windows,
-                ExecutionMode = EngineExecutionMode.RuntimeAssetCook
-            });
 
             IRuntimeAssetCookerRegistry cookerRegistry =
                 kernel.Services.GetService<IRuntimeAssetCookerRegistry>();
             RuntimeAssetCookResult result = RuntimeAssetCookCoordinator.Cook(
                 new RuntimeAssetCookContext(
-                    packageGraph.WorkspacePath,
+                    mount.WorkspacePath,
                     options.TargetProfile,
                     options.Configuration,
                     options.RuntimeIdentifier,
                     options.StagingRoot,
                     options.ForceRebuild),
-                CreateRootRequests(project),
+                CreateRootRequests(mount.Project),
                 cookerRegistry);
 
             string catalogPath = WriteIntermediateCatalog(options.StagingRoot, result.Catalog);

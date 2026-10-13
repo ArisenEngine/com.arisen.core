@@ -13,6 +13,7 @@ namespace ArisenEngine.Core;
 public class CorePackage : IPackageEntry
 {
     private IRuntimeAssetCookerRegistry? m_RuntimeAssetCookerRegistry;
+    private IAssetSourceReimporterRegistry? m_AssetSourceReimporterRegistry;
 
     public void OnLoad(IServiceRegistry registry)
     {
@@ -30,6 +31,8 @@ public class CorePackage : IPackageEntry
         registry.RegisterService<ICommandManager>(new CommandManager());
         m_RuntimeAssetCookerRegistry = new RuntimeAssetCookerRegistry();
         registry.RegisterService<IRuntimeAssetCookerRegistry>(m_RuntimeAssetCookerRegistry);
+        m_AssetSourceReimporterRegistry = new AssetSourceReimporterRegistry();
+        registry.RegisterService<IAssetSourceReimporterRegistry>(m_AssetSourceReimporterRegistry);
 
         KernelLog.Info("[CorePackage] Loaded: Arisen Core Engine Foundation");
     }
@@ -38,6 +41,7 @@ public class CorePackage : IPackageEntry
     {
         MemoryManager.Shutdown();
         m_RuntimeAssetCookerRegistry = null;
+        m_AssetSourceReimporterRegistry = null;
         KernelLog.Info("[CorePackage] Completing diagnostics logging.");
         NativeRuntime.Shutdown();
     }

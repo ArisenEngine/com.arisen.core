@@ -163,20 +163,20 @@ public static class RuntimeAssetSourceReimportHost
                     .ToArray();
                 if (sources.Length == 0)
                 {
-                    KernelLog.InfoFormat(
+                    RuntimeAssetCookConsole.InfoFormat(
                         "[RuntimeAssetSourceReimportHost] Reimporter '{0}' owns no '{1}' source in this workspace.",
                         reimporter.ImporterId,
                         reimporter.SourceAssetType);
                     continue;
                 }
 
-                KernelLog.InfoFormat(
+                RuntimeAssetCookConsole.InfoFormat(
                     "[RuntimeAssetSourceReimportHost] Reimporting {0} '{1}' source(s) through '{2}'.",
                     sources.Length,
                     reimporter.SourceAssetType,
                     reimporter.ImporterId);
                 int children = reimporter.ReimportAll(database, sources);
-                KernelLog.InfoFormat(
+                RuntimeAssetCookConsole.InfoFormat(
                     "[RuntimeAssetSourceReimportHost] Reimported {0} source(s) and re-keyed {1} generated output(s) through '{2}'.",
                     sources.Length,
                     children,
@@ -192,7 +192,7 @@ public static class RuntimeAssetSourceReimportHost
                     "declares the mounted reimporters but nothing of theirs is indexed.");
             }
 
-            KernelLog.InfoFormat(
+            RuntimeAssetCookConsole.InfoFormat(
                 "[RuntimeAssetSourceReimportHost] Reimported {0} source asset(s) and {1} generated output(s).",
                 reimportedSources,
                 reimportedChildren);
@@ -200,7 +200,7 @@ public static class RuntimeAssetSourceReimportHost
         }
         catch (Exception ex)
         {
-            KernelLog.FatalFormat("[RuntimeAssetSourceReimportHost] FATAL ERROR: {0}", ex.Message);
+            RuntimeAssetCookConsole.FatalFormat("[RuntimeAssetSourceReimportHost] FATAL ERROR: {0}", ex.Message);
             return 1;
         }
         finally
@@ -214,7 +214,7 @@ public static class RuntimeAssetSourceReimportHost
             }
             catch (Exception ex)
             {
-                KernelLog.ErrorFormat(
+                RuntimeAssetCookConsole.ErrorFormat(
                     "[RuntimeAssetSourceReimportHost] Shutdown failed: {0}",
                     ex.Message);
             }

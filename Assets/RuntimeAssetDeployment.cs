@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
+using ArisenKernel.Diagnostics;
 
 namespace ArisenEngine.Core.Assets;
 
@@ -18,6 +20,8 @@ public sealed record RuntimeAssetDeploymentResult(
 public static class RuntimeAssetDeployment
 {
     public const string ContentDirectoryName = "Content";
+
+    private static readonly long DeploymentHeartbeatTicks = Stopwatch.Frequency * 2;
 
     public static RuntimeAssetDeploymentResult Deploy(
         RuntimeAssetCookResult cookResult,
@@ -57,10 +61,17 @@ public static class RuntimeAssetDeployment
         int reusedArtifactCount = 0;
         int copiedArtifactCount = 0;
         bool deploymentCommitted = false;
+        int deployedArtifactCount = 0;
+        long deploymentStarted = Stopwatch.GetTimestamp();
+        long lastDeploymentHeartbeat = 0;
 
         try
         {
             Directory.CreateDirectory(stagingContentRoot);
+            RuntimeAssetCookConsole.InfoFormat(
+                "[RuntimeAssetDeployment] Deploying {0} artifact(s) to {1}",
+                cookResult.Catalog.Artifacts.Count,
+                contentRoot);
             foreach (RuntimeAssetCatalogArtifact artifact in cookResult.Catalog.Artifacts)
             {
                 string destinationPath = cookResult.Catalog.ResolveArtifactPath(
@@ -82,6 +93,21 @@ public static class RuntimeAssetDeployment
                     File.Copy(sourcePaths[artifact.Identity], destinationPath, overwrite: false);
                     copiedArtifactCount++;
                 }
+
+                deployedArtifactCount++;
+                long now = Stopwatch.GetTimestamp();
+                if (now - lastDeploymentHeartbeat >= DeploymentHeartbeatTicks)
+                {
+                    lastDeploymentHeartbeat = now;
+                    RuntimeAssetCookConsole.InfoFormat(
+                        "[RuntimeAssetDeployment] Deployed {0}/{1} artifact(s) in {2:N1} s " +
+                        "({3} reused, {4} copied)",
+                        deployedArtifactCount,
+                        cookResult.Catalog.Artifacts.Count,
+                        Stopwatch.GetElapsedTime(deploymentStarted).TotalSeconds,
+                        reusedArtifactCount,
+                        copiedArtifactCount);
+                }
             }
 
             cookResult.Catalog.ValidateDeployment(stagingContentRoot);
@@ -95,6 +121,13 @@ public static class RuntimeAssetDeployment
                 backupRoot);
             deploymentCommitted = true;
 
+            RuntimeAssetCookConsole.InfoFormat(
+                "[RuntimeAssetDeployment] Deployment complete: {0} artifact(s) in {1:N1} s " +
+                "({2} reused, {3} copied)",
+                cookResult.Catalog.Artifacts.Count,
+                Stopwatch.GetElapsedTime(deploymentStarted).TotalSeconds,
+                reusedArtifactCount,
+                copiedArtifactCount);
             return new RuntimeAssetDeploymentResult(
                 fullOutputRoot,
                 contentRoot,

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ArisenKernel.Diagnostics;
 using ArisenKernel.Lifecycle;
 using ArisenKernel.Packages;
@@ -27,6 +28,13 @@ public static class RuntimeAssetCookHost
         try
         {
             RuntimeAssetCookHostOptions options = RuntimeAssetCookHostOptions.Parse(args);
+            RuntimeAssetCookConsole.InfoFormat(
+                "[RuntimeAssetCookHost] Runtime asset cook starting: profile '{0}', configuration '{1}', " +
+                "workspace '{2}'",
+                options.TargetProfile,
+                options.Configuration,
+                options.WorkspaceRoot);
+            long mountStarted = Stopwatch.GetTimestamp();
             RuntimeAssetBuildStageHost.Mount mount = RuntimeAssetBuildStageHost.Open(
                 options.WorkspaceRoot,
                 options.TargetProfile,
@@ -34,6 +42,9 @@ public static class RuntimeAssetCookHost
             kernel = mount.Kernel;
             projectSubsystem = mount.ProjectSubsystem;
             ownsKernelLifetime = true;
+            RuntimeAssetCookConsole.InfoFormat(
+                "[RuntimeAssetCookHost] Packages mounted in {0:N1} s; planning cook roots.",
+                Stopwatch.GetElapsedTime(mountStarted).TotalSeconds);
 
             IRuntimeAssetCookerRegistry cookerRegistry =
                 kernel.Services.GetService<IRuntimeAssetCookerRegistry>();
@@ -49,7 +60,7 @@ public static class RuntimeAssetCookHost
                 cookerRegistry);
 
             string catalogPath = WriteIntermediateCatalog(options.StagingRoot, result.Catalog);
-            KernelLog.InfoFormat(
+            RuntimeAssetCookConsole.InfoFormat(
                 "[RuntimeAssetCookHost] Cooked {0} root(s) into {1} artifact(s). Intermediate catalog: {2}",
                 result.Catalog.Roots.Count,
                 result.Catalog.Artifacts.Count,
@@ -60,7 +71,7 @@ public static class RuntimeAssetCookHost
                 RuntimeAssetDeploymentResult deployment = RuntimeAssetDeployment.Deploy(
                     result,
                     options.OutputRoot);
-                KernelLog.InfoFormat(
+                RuntimeAssetCookConsole.InfoFormat(
                     "[RuntimeAssetCookHost] Deployed {0} artifact(s) to {1}: {2} reused, " +
                     "{3} copied. Runtime catalog: {4}",
                     deployment.ArtifactCount,
@@ -82,7 +93,7 @@ public static class RuntimeAssetCookHost
         }
         catch (Exception ex)
         {
-            KernelLog.FatalFormat("[RuntimeAssetCookHost] FATAL ERROR: {0}", ex.Message);
+            RuntimeAssetCookConsole.FatalFormat("[RuntimeAssetCookHost] FATAL ERROR: {0}", ex.Message);
             return 1;
         }
         finally

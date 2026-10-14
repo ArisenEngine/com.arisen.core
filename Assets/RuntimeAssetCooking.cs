@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using ArisenKernel.Diagnostics;
 
 namespace ArisenEngine.Core.Assets;
 
@@ -92,6 +95,14 @@ public interface IRuntimeAssetCooker
     string ProviderId { get; }
 
     IReadOnlyCollection<string> AssetTypes { get; }
+
+    /// <summary>
+    /// True when the coordinator may invoke <see cref="Cook"/> for several different requests at the
+    /// same time. A cooker that opts in must keep no mutable state of its own while cooking and must
+    /// not depend on the order its requests are served in; the asset database is safe to use from
+    /// several threads, and every cooked file a request writes is owned by that request.
+    /// </summary>
+    bool SupportsConcurrentCooking => false;
 
     RuntimeAssetCookerOutput Cook(
         RuntimeAssetCookContext context,
@@ -229,6 +240,210 @@ public sealed class RuntimeAssetCookResult
 }
 
 /// <summary>
+/// Console channel for a build-stage cook.
+///
+/// The diagnostics logger only becomes resolvable once the kernel has booted, and everything the
+/// engine logs after that is written to the player log and nowhere else. A workspace build driven
+/// from a console therefore sits on the boot lines for minutes with no sign of the work happening,
+/// even though the player log is being written the whole time. A cook is a build-stage command, so
+/// its phases are reported on both channels instead of relying on the logger alone.
+/// </summary>
+public static class RuntimeAssetCookConsole
+{
+    public static void Info(string message)
+    {
+        // Before the kernel boots there is no logger, and KernelLog itself falls back to the console:
+        // writing again here would print the line twice.
+        bool consoleIsAlreadyWritten = !KernelLog.HasLogger;
+        KernelLog.Info(message);
+        if (consoleIsAlreadyWritten)
+        {
+            return;
+        }
+
+        Console.Out.WriteLine($"[INFO] {message}");
+        Console.Out.Flush();
+    }
+
+    public static void InfoFormat(string format, params object[] args)
+    {
+        Info(string.Format(format, args));
+    }
+
+    public static void Fatal(string message)
+    {
+        bool consoleIsAlreadyWritten = !KernelLog.HasLogger;
+        KernelLog.Fatal(message);
+        if (consoleIsAlreadyWritten)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[FATAL] {message}");
+        Console.Error.Flush();
+    }
+
+    public static void FatalFormat(string format, params object[] args)
+    {
+        Fatal(string.Format(format, args));
+    }
+
+    public static void ErrorFormat(string format, params object[] args)
+    {
+        string message = string.Format(format, args);
+        bool consoleIsAlreadyWritten = !KernelLog.HasLogger;
+        KernelLog.Error(message);
+        if (consoleIsAlreadyWritten)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[ERROR] {message}");
+        Console.Error.Flush();
+    }
+}
+
+/// <summary>
+/// Console and log progress for a runtime asset cook.
+///
+/// The cook is a minutes-long, single-process phase whose worklist is discovered while it runs, and
+/// the engine host prints nothing at all between mounting the packages and shutting the kernel down,
+/// so a workspace build looks dead for minutes at a time. This reports a heartbeat while the cook
+/// runs and a per-asset-type summary when it finishes, taken from the cook's own measurements rather
+/// than from an estimate of how long it should have taken. Reporting never influences what the cook
+/// produces.
+/// </summary>
+internal sealed class RuntimeAssetCookProgress
+{
+    private const long HeartbeatMilliseconds = 2000;
+    private const int SlowestArtifactCount = 5;
+    private const int ReportedSlowestCount = 3;
+
+    private readonly object m_Gate = new();
+    private readonly Stopwatch m_Clock = Stopwatch.StartNew();
+    private readonly Dictionary<string, AssetTypeTally> m_Tallies =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ArtifactTiming> m_Slowest = new(SlowestArtifactCount + 1);
+    private long m_NextHeartbeatMilliseconds = HeartbeatMilliseconds;
+    private int m_CookedCount;
+
+    public void CookPlanStarted(RuntimeAssetCookContext context, int rootCount)
+    {
+        RuntimeAssetCookConsole.InfoFormat(
+            "[RuntimeAssetCookProgress] Cook started: profile '{0}', configuration '{1}', {2} root(s). " +
+            "Staging root: {3}",
+            context.TargetProfile,
+            context.Configuration,
+            rootCount,
+            context.StagingRoot);
+    }
+
+    public void ArtifactCooked(string assetType, string identity, TimeSpan elapsed)
+    {
+        lock (m_Gate)
+        {
+            m_CookedCount++;
+            if (!m_Tallies.TryGetValue(assetType, out AssetTypeTally? tally))
+            {
+                tally = new AssetTypeTally();
+                m_Tallies.Add(assetType, tally);
+            }
+
+            tally.Count++;
+            tally.Seconds += elapsed.TotalSeconds;
+
+            var timing = new ArtifactTiming(assetType, identity, elapsed.TotalSeconds);
+            if (m_Slowest.Count < SlowestArtifactCount)
+            {
+                m_Slowest.Add(timing);
+                m_Slowest.Sort(CompareTimings);
+            }
+            else if (timing.Seconds > m_Slowest[^1].Seconds)
+            {
+                m_Slowest[^1] = timing;
+                m_Slowest.Sort(CompareTimings);
+            }
+
+            ReportHeartbeatIfDue();
+        }
+    }
+
+    public void CookPhaseCompleted(int distinctArtifactCount)
+    {
+        RuntimeAssetCookConsole.InfoFormat(
+            "[RuntimeAssetCookProgress] Cook plan complete: {0} request(s) cooked into {1} distinct " +
+            "artifact(s) in {2:N1} s.",
+            m_CookedCount,
+            distinctArtifactCount,
+            m_Clock.Elapsed.TotalSeconds);
+        foreach (KeyValuePair<string, AssetTypeTally> tally in m_Tallies
+                     .OrderByDescending(pair => pair.Value.Seconds)
+                     .ThenBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            RuntimeAssetCookConsole.InfoFormat(
+                "[RuntimeAssetCookProgress]   {0}: {1} request(s) in {2:N1} s",
+                tally.Key,
+                tally.Value.Count,
+                tally.Value.Seconds);
+        }
+
+        int reported = System.Math.Min(m_Slowest.Count, ReportedSlowestCount);
+        for (int index = 0; index < reported; index++)
+        {
+            ArtifactTiming timing = m_Slowest[index];
+            RuntimeAssetCookConsole.InfoFormat(
+                "[RuntimeAssetCookProgress]   slowest #{0}: {1} ({2}) in {3:N1} s",
+                index + 1,
+                timing.Identity,
+                timing.AssetType,
+                timing.Seconds);
+        }
+    }
+
+    public void CatalogBuilt(int artifactCount)
+    {
+        RuntimeAssetCookConsole.InfoFormat(
+            "[RuntimeAssetCookProgress] Catalog closed with {0} artifact(s) in {1:N1} s.",
+            artifactCount,
+            m_Clock.Elapsed.TotalSeconds);
+    }
+
+    private static int CompareTimings(ArtifactTiming left, ArtifactTiming right) =>
+        right.Seconds.CompareTo(left.Seconds);
+
+    private void ReportHeartbeatIfDue()
+    {
+        long elapsedMilliseconds = m_Clock.ElapsedMilliseconds;
+        if (elapsedMilliseconds < m_NextHeartbeatMilliseconds)
+        {
+            return;
+        }
+
+        m_NextHeartbeatMilliseconds = elapsedMilliseconds + HeartbeatMilliseconds;
+        double elapsedSeconds = m_Clock.Elapsed.TotalSeconds;
+        ArtifactTiming slowest = m_Slowest.Count > 0 ? m_Slowest[0] : default;
+        RuntimeAssetCookConsole.InfoFormat(
+            "[RuntimeAssetCookProgress] Cooked {0} request(s) in {1:N1} s ({2:N1}/s); slowest so far " +
+            "{3} ({4}) at {5:N1} s",
+            m_CookedCount,
+            elapsedSeconds,
+            m_CookedCount / System.Math.Max(elapsedSeconds, 1.0),
+            slowest.Identity,
+            slowest.AssetType,
+            slowest.Seconds);
+    }
+
+    private sealed class AssetTypeTally
+    {
+        public int Count;
+
+        public double Seconds;
+    }
+
+    private readonly record struct ArtifactTiming(string AssetType, string Identity, double Seconds);
+}
+
+/// <summary>
 /// Deterministically invokes package-owned cookers and converts their source-oriented dependency
 /// requests into a closed deployable catalog. Source format parsing remains inside providers.
 /// </summary>
@@ -236,6 +451,150 @@ public static class RuntimeAssetCookCoordinator
 {
     private const int MaxRootCount = 1024;
     private const int MaxCookRequestCount = 1_000_000;
+
+    // A cook is a build-stage pass, not a frame path, so a batch of independent requests may use
+    // several cores. The bound keeps the peak memory of concurrent raster decodes reasonable and
+    // leaves headroom for the rest of the build.
+    private static readonly int MaxCookDegreeOfParallelism =
+        System.Math.Min(Environment.ProcessorCount, 16);
+
+    /// <summary>
+    /// Cooks one request and reports it, so a batched request and a sequential one report identically.
+    /// </summary>
+    private static RuntimeAssetCookerOutput CookOne(
+        RuntimeAssetCookContext context,
+        IRuntimeAssetCooker cooker,
+        CookRequestKey key,
+        string chain,
+        RuntimeAssetCookProgress progress)
+    {
+        RuntimeAssetCookerOutput? output;
+        long cookStarted = Stopwatch.GetTimestamp();
+        try
+        {
+            output = cooker.Cook(
+                context,
+                new RuntimeAssetCookRequest(
+                    key.Guid,
+                    key.PackageId,
+                    key.AssetType,
+                    key.Variant));
+        }
+        catch (Exception ex)
+        {
+            throw Invalid(
+                $"Cooker provider '{cooker.ProviderId}' failed at {chain}: {ex.Message}",
+                ex);
+        }
+
+        if (output == null)
+        {
+            throw Invalid(
+                $"Cooker provider '{cooker.ProviderId}' returned no output at {chain}.");
+        }
+
+        progress.ArtifactCooked(
+            key.AssetType,
+            FormatKey(key),
+            Stopwatch.GetElapsedTime(cookStarted));
+        return output;
+    }
+
+    /// <summary>
+    /// Cooks a batch of requests for one cooker that declared itself safe to call concurrently. The
+    /// outputs are returned in request order, and the first request that failed in request order is
+    /// the one reported, so a failure is deterministic rather than whichever thread lost the race.
+    /// </summary>
+    private static RuntimeAssetCookerOutput[] CookBatch(
+        RuntimeAssetCookContext context,
+        IRuntimeAssetCooker cooker,
+        List<CookRequestKey> batch,
+        IReadOnlyDictionary<CookRequestKey, string> requestChains,
+        RuntimeAssetCookProgress progress)
+    {
+        var outputs = new RuntimeAssetCookerOutput[batch.Count];
+        var failures = new Exception?[batch.Count];
+        Parallel.For(
+            0,
+            batch.Count,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = System.Math.Min(MaxCookDegreeOfParallelism, batch.Count)
+            },
+            index =>
+            {
+                try
+                {
+                    outputs[index] = CookOne(
+                        context,
+                        cooker,
+                        batch[index],
+                        requestChains[batch[index]],
+                        progress);
+                }
+                catch (Exception failure)
+                {
+                    failures[index] = failure;
+                }
+            });
+
+        for (int index = 0; index < failures.Length; index++)
+        {
+            if (failures[index] is Exception failure)
+            {
+                ExceptionDispatchInfo.Capture(failure).Throw();
+            }
+        }
+
+        return outputs;
+    }
+
+    /// <summary>
+    /// Collects the pending requests that may be cooked alongside <paramref name="first"/>. Only a
+    /// cooker that declared <see cref="IRuntimeAssetCooker.SupportsConcurrentCooking"/> is batched,
+    /// and only requests of its own asset type are taken: the batch is a set of sibling requests the
+    /// worklist discovered together, and it never reorders what the cook publishes.
+    /// </summary>
+    private static List<CookRequestKey> TakeCookBatch(
+        SortedSet<CookRequestKey> pending,
+        Dictionary<CookRequestKey, CookedNode> nodesByRequest,
+        Dictionary<RuntimeAssetIdentity, CookedNode> nodesByIdentity,
+        CookRequestKey first,
+        IRuntimeAssetCooker cooker)
+    {
+        var batch = new List<CookRequestKey>(MaxCookDegreeOfParallelism) { first };
+        if (!cooker.SupportsConcurrentCooking || MaxCookDegreeOfParallelism <= 1)
+        {
+            return batch;
+        }
+
+        var selected = new List<CookRequestKey>();
+        foreach (CookRequestKey candidate in pending)
+        {
+            if (batch.Count + selected.Count >= MaxCookDegreeOfParallelism)
+            {
+                break;
+            }
+
+            if (!string.Equals(candidate.AssetType, first.AssetType, StringComparison.Ordinal) ||
+                nodesByRequest.ContainsKey(candidate) ||
+                (candidate.Variant.Length > 0 &&
+                 nodesByIdentity.ContainsKey(new RuntimeAssetIdentity(candidate.Guid, candidate.Variant))))
+            {
+                continue;
+            }
+
+            selected.Add(candidate);
+        }
+
+        foreach (CookRequestKey candidate in selected)
+        {
+            pending.Remove(candidate);
+            batch.Add(candidate);
+        }
+
+        return batch;
+    }
 
     public static RuntimeAssetCookResult Cook(
         RuntimeAssetCookContext context,
@@ -252,6 +611,9 @@ public static class RuntimeAssetCookCoordinator
         {
             throw Invalid($"Root count {rootArray.Length} exceeds the limit {MaxRootCount}.");
         }
+
+        var progress = new RuntimeAssetCookProgress();
+        progress.CookPlanStarted(context, rootArray.Length);
 
         var rootNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var rootBindings = new List<RootBinding>(rootArray.Length);
@@ -313,60 +675,57 @@ public static class RuntimeAssetCookCoordinator
                     $"No package-owned cooker is registered for asset type '{key.AssetType}' at {chain}.");
             }
 
-            RuntimeAssetCookerOutput output;
-            try
+            List<CookRequestKey> batch = TakeCookBatch(
+                pending,
+                nodesByRequest,
+                nodesByIdentity,
+                key,
+                cooker);
+            RuntimeAssetCookerOutput[] outputs = batch.Count == 1
+                ? new[] { CookOne(context, cooker, key, chain, progress) }
+                : CookBatch(context, cooker, batch, requestChains, progress);
+            for (int index = 0; index < batch.Count; index++)
             {
-                output = cooker.Cook(
+                CookRequestKey batchKey = batch[index];
+                string batchChain = requestChains[batchKey];
+                CookedNode node = ValidateOutput(
                     context,
-                    new RuntimeAssetCookRequest(
-                        key.Guid,
-                        key.PackageId,
-                        key.AssetType,
-                        key.Variant));
-            }
-            catch (Exception ex)
-            {
-                throw Invalid(
-                    $"Cooker provider '{cooker.ProviderId}' failed at {chain}: {ex.Message}",
-                    ex);
-            }
-
-            if (output == null)
-            {
-                throw Invalid(
-                    $"Cooker provider '{cooker.ProviderId}' returned no output at {chain}.");
-            }
-
-            CookedNode node = ValidateOutput(context, cooker.ProviderId, key, chain, output);
-            if (nodesByIdentity.TryGetValue(node.Artifact.Identity, out CookedNode? existingNode))
-            {
-                if (!AreEquivalent(existingNode, node))
+                    cooker.ProviderId,
+                    batchKey,
+                    batchChain,
+                    outputs[index]);
+                if (nodesByIdentity.TryGetValue(node.Artifact.Identity, out CookedNode? existingNode))
                 {
-                    throw Invalid(
-                        $"Cook requests produced conflicting metadata for artifact " +
-                        $"'{node.Artifact.Identity}' at {chain}.");
+                    if (!AreEquivalent(existingNode, node))
+                    {
+                        throw Invalid(
+                            $"Cook requests produced conflicting metadata for artifact " +
+                            $"'{node.Artifact.Identity}' at {batchChain}.");
+                    }
+
+                    node = existingNode;
+                }
+                else
+                {
+                    nodesByIdentity.Add(node.Artifact.Identity, node);
                 }
 
-                node = existingNode;
-            }
-            else
-            {
-                nodesByIdentity.Add(node.Artifact.Identity, node);
-            }
-
-            nodesByRequest.Add(key, node);
-            foreach (RuntimeAssetCookDependencyRequest dependency in node.Dependencies)
-            {
-                CookRequestKey dependencyKey = CreateKey(
-                    dependency.Guid,
-                    dependency.PackageId,
-                    dependency.AssetType,
-                    dependency.Variant,
-                    $"dependency of '{node.Artifact.Identity}'");
-                string dependencyChain = chain + " -> " + FormatKey(dependencyKey);
-                Enqueue(dependencyKey, dependencyChain, pending, requestChains);
+                nodesByRequest.Add(batchKey, node);
+                foreach (RuntimeAssetCookDependencyRequest dependency in node.Dependencies)
+                {
+                    CookRequestKey dependencyKey = CreateKey(
+                        dependency.Guid,
+                        dependency.PackageId,
+                        dependency.AssetType,
+                        dependency.Variant,
+                        $"dependency of '{node.Artifact.Identity}'");
+                    string dependencyChain = batchChain + " -> " + FormatKey(dependencyKey);
+                    Enqueue(dependencyKey, dependencyChain, pending, requestChains);
+                }
             }
         }
+
+        progress.CookPhaseCompleted(nodesByIdentity.Count);
 
         var catalogRoots = new RuntimeAssetCatalogRoot[rootBindings.Count];
         for (int index = 0; index < rootBindings.Count; index++)
@@ -426,6 +785,7 @@ public static class RuntimeAssetCookCoordinator
                 artifact,
                 nodesByIdentity[artifact.Identity].SourcePath))
             .ToArray();
+        progress.CatalogBuilt(catalog.Artifacts.Count);
         return new RuntimeAssetCookResult(catalog, files);
     }
 

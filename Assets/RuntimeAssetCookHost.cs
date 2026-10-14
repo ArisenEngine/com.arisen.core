@@ -28,6 +28,7 @@ public static class RuntimeAssetCookHost
         try
         {
             RuntimeAssetCookHostOptions options = RuntimeAssetCookHostOptions.Parse(args);
+            StartupTargetOptions startupTargetOptions = StartupTargetOptions.Parse(args);
             RuntimeAssetCookConsole.InfoFormat(
                 "[RuntimeAssetCookHost] Runtime asset cook starting: profile '{0}', configuration '{1}', " +
                 "workspace '{2}'",
@@ -56,7 +57,7 @@ public static class RuntimeAssetCookHost
                     options.RuntimeIdentifier,
                     options.StagingRoot,
                     options.ForceRebuild),
-                CreateRootRequests(mount.Project),
+                CreateRootRequests(mount.Project, startupTargetOptions.Resolve(mount.Project)),
                 cookerRegistry);
 
             string catalogPath = WriteIntermediateCatalog(options.StagingRoot, result.Catalog);
@@ -112,16 +113,23 @@ public static class RuntimeAssetCookHost
         }
     }
 
-    private static RuntimeAssetCookRootRequest[] CreateRootRequests(ProjectManifest project)
+    private static RuntimeAssetCookRootRequest[] CreateRootRequests(
+        ProjectManifest project,
+        ResolvedStartupTarget startupTarget)
     {
-        ProjectAssetReference startupScene = project.StartupScene is { IsValid: true } scene
-            ? scene
-            : throw new InvalidDataException(
-                "Workspace asset cooking requires StartupScene.Guid and StartupScene.PackageId.");
+        ProjectAssetReference startupScene = startupTarget.Scene ?? throw new InvalidDataException(
+            "Workspace asset cooking requires a startup scene; declare StartupScene or pass --startup-scene.");
         ProjectAssetReference renderPipeline = project.RenderPipeline is { IsValid: true } pipeline
             ? pipeline
             : throw new InvalidDataException(
                 "Workspace asset cooking requires RenderPipeline.Guid and RenderPipeline.PackageId.");
+
+        // A malformed declaration is a workspace defect whether or not an argument replaces it.
+        if (project.StartupWorld is { IsValid: false })
+        {
+            throw new InvalidDataException(
+                "Workspace StartupWorld requires both a valid Guid and PackageId.");
+        }
 
         var roots = new List<RuntimeAssetCookRootRequest>
         {
@@ -137,18 +145,12 @@ public static class RuntimeAssetCookHost
                 "RenderPipelineSettings")
         };
 
-        if (project.StartupWorld != null)
+        if (startupTarget.World is { } startupWorld)
         {
-            if (!project.StartupWorld.IsValid)
-            {
-                throw new InvalidDataException(
-                    "Workspace StartupWorld requires both a valid Guid and PackageId.");
-            }
-
             roots.Add(new RuntimeAssetCookRootRequest(
                 "startupWorld",
-                project.StartupWorld.Guid,
-                project.StartupWorld.PackageId,
+                startupWorld.Guid,
+                startupWorld.PackageId,
                 "World"));
         }
 

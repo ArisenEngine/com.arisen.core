@@ -57,7 +57,11 @@ public static class RuntimeAssetCookHost
                     options.RuntimeIdentifier,
                     options.StagingRoot,
                     options.ForceRebuild),
-                CreateRootRequests(mount.Project, startupTargetOptions.Resolve(mount.Project)),
+                CreateRootRequests(
+                    mount.Project,
+                    startupTargetOptions.Resolve(
+                        mount.Project,
+                        ResolveProfileDefinition(mount.Project, options.TargetProfile))),
                 cookerRegistry);
 
             string catalogPath = WriteIntermediateCatalog(options.StagingRoot, result.Catalog);
@@ -117,8 +121,6 @@ public static class RuntimeAssetCookHost
         ProjectManifest project,
         ResolvedStartupTarget startupTarget)
     {
-        ProjectAssetReference startupScene = startupTarget.Scene ?? throw new InvalidDataException(
-            "Workspace asset cooking requires a startup scene; declare StartupScene or pass --startup-scene.");
         ProjectAssetReference renderPipeline = project.RenderPipeline is { IsValid: true } pipeline
             ? pipeline
             : throw new InvalidDataException(
@@ -134,16 +136,37 @@ public static class RuntimeAssetCookHost
         var roots = new List<RuntimeAssetCookRootRequest>
         {
             new RuntimeAssetCookRootRequest(
-                "startupScene",
-                startupScene.Guid,
-                startupScene.PackageId,
-                "Scene"),
-            new RuntimeAssetCookRootRequest(
                 "renderPipeline",
                 renderPipeline.Guid,
                 renderPipeline.PackageId,
                 "RenderPipelineSettings")
         };
+
+        if (startupTarget.HasSample)
+        {
+            // The sample's content arrives through the catalogue cooker's dependencies, so a
+            // cooked-only profile can boot any declared sample.
+            ProjectAssetReference catalogue = project.SampleCatalogue is { IsValid: true } declared
+                ? declared
+                : throw new InvalidDataException(
+                    $"Sample '{startupTarget.Sample}' was selected, so the workspace must declare " +
+                    "SampleCatalogue.Guid and SampleCatalogue.PackageId.");
+            roots.Add(new RuntimeAssetCookRootRequest(
+                "sampleCatalogue",
+                catalogue.Guid,
+                catalogue.PackageId,
+                "SampleCatalogue"));
+            return roots.ToArray();
+        }
+
+        ProjectAssetReference startupScene = startupTarget.Scene ?? throw new InvalidDataException(
+            "Workspace asset cooking requires a startup scene; declare StartupScene, select a " +
+            "profile with one, or pass --startup-scene.");
+        roots.Add(new RuntimeAssetCookRootRequest(
+            "startupScene",
+            startupScene.Guid,
+            startupScene.PackageId,
+            "Scene"));
 
         if (startupTarget.World is { } startupWorld)
         {
@@ -155,6 +178,18 @@ public static class RuntimeAssetCookHost
         }
 
         return roots.ToArray();
+    }
+
+    private static ProfileDefinition? ResolveProfileDefinition(ProjectManifest project, string profile)
+    {
+        if (project.Profiles == null ||
+            string.IsNullOrWhiteSpace(profile) ||
+            !project.Profiles.TryGetValue(profile, out ProfileDefinition? definition))
+        {
+            return null;
+        }
+
+        return definition;
     }
 
     private static string WriteIntermediateCatalog(

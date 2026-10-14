@@ -65,6 +65,11 @@ public sealed class RenderPipelineSettingsSourceAsset
     private RenderPipelineSettingsSourceAsset() { }
 }
 
+public sealed class SampleCatalogueSourceAsset
+{
+    private SampleCatalogueSourceAsset() { }
+}
+
 public static class AssetDatabaseExtensions
 {
     public static bool TryGetAsset<TAsset>(

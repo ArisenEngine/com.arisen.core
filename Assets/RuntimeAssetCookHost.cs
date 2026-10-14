@@ -49,6 +49,8 @@ public static class RuntimeAssetCookHost
 
             IRuntimeAssetCookerRegistry cookerRegistry =
                 kernel.Services.GetService<IRuntimeAssetCookerRegistry>();
+            ProfileDefinition? profileDefinition =
+                ResolveProfileDefinition(mount.Project, options.TargetProfile);
             RuntimeAssetCookResult result = RuntimeAssetCookCoordinator.Cook(
                 new RuntimeAssetCookContext(
                     mount.WorkspacePath,
@@ -59,9 +61,8 @@ public static class RuntimeAssetCookHost
                     options.ForceRebuild),
                 CreateRootRequests(
                     mount.Project,
-                    startupTargetOptions.Resolve(
-                        mount.Project,
-                        ResolveProfileDefinition(mount.Project, options.TargetProfile))),
+                    startupTargetOptions.Resolve(mount.Project, profileDefinition),
+                    profileDefinition?.IsSampleGallery == true),
                 cookerRegistry);
 
             string catalogPath = WriteIntermediateCatalog(options.StagingRoot, result.Catalog);
@@ -119,7 +120,8 @@ public static class RuntimeAssetCookHost
 
     private static RuntimeAssetCookRootRequest[] CreateRootRequests(
         ProjectManifest project,
-        ResolvedStartupTarget startupTarget)
+        ResolvedStartupTarget startupTarget,
+        bool isSampleGalleryProfile)
     {
         ProjectAssetReference renderPipeline = project.RenderPipeline is { IsValid: true } pipeline
             ? pipeline
@@ -146,17 +148,25 @@ public static class RuntimeAssetCookHost
         {
             // The sample's content arrives through the catalogue cooker's dependencies, so a
             // cooked-only profile can boot any declared sample.
-            ProjectAssetReference catalogue = project.SampleCatalogue is { IsValid: true } declared
-                ? declared
-                : throw new InvalidDataException(
-                    $"Sample '{startupTarget.Sample}' was selected, so the workspace must declare " +
-                    "SampleCatalogue.Guid and SampleCatalogue.PackageId.");
+            ProjectAssetReference catalogue = ResolveSampleCatalogue(project, startupTarget.Sample);
             roots.Add(new RuntimeAssetCookRootRequest(
                 "sampleCatalogue",
                 catalogue.Guid,
                 catalogue.PackageId,
                 "SampleCatalogue"));
             return roots.ToArray();
+        }
+
+        if (isSampleGalleryProfile)
+        {
+            // The gallery boots the hub and can switch to any catalogue sample in-process, so its
+            // cook closes over the whole catalogue in addition to the profile's own content.
+            ProjectAssetReference galleryCatalogue = ResolveSampleCatalogue(project, sampleId: null);
+            roots.Add(new RuntimeAssetCookRootRequest(
+                "sampleCatalogue",
+                galleryCatalogue.Guid,
+                galleryCatalogue.PackageId,
+                "SampleCatalogue"));
         }
 
         ProjectAssetReference startupScene = startupTarget.Scene ?? throw new InvalidDataException(
@@ -178,6 +188,20 @@ public static class RuntimeAssetCookHost
         }
 
         return roots.ToArray();
+    }
+
+    private static ProjectAssetReference ResolveSampleCatalogue(ProjectManifest project, string? sampleId)
+    {
+        if (project.SampleCatalogue is { IsValid: true } catalogue)
+        {
+            return catalogue;
+        }
+
+        throw new InvalidDataException(sampleId == null
+            ? "A gallery profile cooks the workspace's samples, so it must declare " +
+              "SampleCatalogue.Guid and SampleCatalogue.PackageId."
+            : $"Sample '{sampleId}' was selected, so the workspace must declare " +
+              "SampleCatalogue.Guid and SampleCatalogue.PackageId.");
     }
 
     private static ProfileDefinition? ResolveProfileDefinition(ProjectManifest project, string profile)

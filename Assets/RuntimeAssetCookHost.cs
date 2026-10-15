@@ -99,7 +99,9 @@ public static class RuntimeAssetCookHost
         }
         catch (Exception ex)
         {
-            RuntimeAssetCookConsole.FatalFormat("[RuntimeAssetCookHost] FATAL ERROR: {0}", ex.Message);
+            // A cook failure is diagnosed from its cause, not from the wrapper the owner threw: the
+            // whole chain and the stack are what a headless run has to leave behind.
+            RuntimeAssetCookConsole.FatalFormat("[RuntimeAssetCookHost] FATAL ERROR: {0}", ex);
             return 1;
         }
         finally

@@ -50,6 +50,18 @@ public struct StaticMeshRenderItem
     /// </summary>
     public int SkinJointCount;
 
+    /// <summary>
+    /// First local joint translation of the entity's pose beside <see cref="SkinJointOffset"/>;
+    /// ignored when <see cref="SkinTranslationCount"/> is 0.
+    /// </summary>
+    public int SkinTranslationOffset;
+
+    /// <summary>
+    /// Local joint translations the entity supplies for a skinned mesh. Zero keeps every cooked rest
+    /// translation, which is how a rotations-only pose renders.
+    /// </summary>
+    public int SkinTranslationCount;
+
     public bool IsVisible => Visible != 0;
     public bool IsValid => MeshGuid != Guid.Empty && IsVisible;
 }
